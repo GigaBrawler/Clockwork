@@ -43,7 +43,9 @@ import org.valkyrienskies.core.api.ships.PhysShip
 import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.core.api.world.PhysLevel
 import org.valkyrienskies.core.api.world.properties.DimensionId
+import org.valkyrienskies.core.impl.game.ships.PhysPoseImpl
 import org.valkyrienskies.core.internal.joints.*
+import org.valkyrienskies.core.internal.ships.VsiPhysShip
 import org.valkyrienskies.core.impl.bodies.properties.BodyTransformFactory
 import org.valkyrienskies.core.internal.world.VsiPhysLevel
 import org.valkyrienskies.core.util.datastructures.DenseBlockPosSet
@@ -123,6 +125,15 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     private var lastSpeed = 0f
     private var lastMode = PhysBearingRotationMode.UNLOCKED
 
+    private var kinematicAngleBaseRad: Double = Double.NaN
+    private var kinematicSecondsSinceBaseUpdate: Double = 0.0
+    private var kinematicActualAngleRad: Double = Double.NaN
+    private var kinematicUnlockedAngleRad: Double = Double.NaN
+    private var kinematicUnlockedOmegaRadPerSec: Double = 0.0
+    private var kinematicLastModeOrdinal: Int = -1
+    private var kinematicLastTargetRotWorld: Quaterniond = Quaterniond()
+    private var kinematicHasLastTargetRotWorld: Boolean = false
+
     init {
         setLazyTickRate(3)
     }
@@ -186,6 +197,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                     subPose,
                     mainId,
                     mainPose,
+                    maxForceTorque = MAX_JOINT_FORCE_TORQUE,
                     driveFreeSpin = true,
                 )
                 val id = vsiPhysLevel.addJoint(newJoint)
@@ -194,15 +206,17 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                     joint = newJoint
                     shouldVerifyConnection = false
                 }
-                return
             }
-        } else if (existing == null) {
-            return
+        } else if (existing == null && jointID != -1) {
+            // The joint was removed (most likely because the ship unloaded/reloaded); recreate it.
+            jointID = -1
+            joint = null
+            shouldVerifyConnection = true
         }
 
         val updated = when (existing) {
             is VSRevoluteJoint -> existing.copy(
-                maxForceTorque = existing.maxForceTorque,
+                maxForceTorque = MAX_JOINT_FORCE_TORQUE,
                 driveVelocity = null,
                 driveForceLimit = null,
                 driveGearRatio = null,
@@ -213,31 +227,68 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 existing.pose0,
                 existing.shipId1,
                 existing.pose1,
+                maxForceTorque = MAX_JOINT_FORCE_TORQUE,
                 driveFreeSpin = true,
             )
-            else -> return
+            else -> null
         }
-        if (updated != existing) {
+        if (updated != null && updated != existing && jointID != -1) {
             vsiPhysLevel.updateJoint(jointID, updated)
             joint = updated
         }
 
-        val activeJoint = if (updated != existing) updated else existing
-        val (subLocalPos, mainLocalPos) = when (activeJoint) {
-            is VSRevoluteJoint -> activeJoint.pose0.pos to activeJoint.pose1.pos
-            is VSFixedJoint -> activeJoint.pose0.pos to activeJoint.pose1.pos
-            else -> return
+        val subLocalPos = subPose.pos
+        val mainLocalPos = mainPose.pos
+
+        val dtSecondsRaw = if (this::dimension.isInitialized) {
+            ClockworkMod.getLastPhysDeltaSeconds(dimension)
+        } else {
+            1.0 / 60.0
+        }
+        val dtSeconds = if (dtSecondsRaw > 1e-6) dtSecondsRaw else (1.0 / 60.0)
+
+        // Reset kinematic state when switching modes, so we don't carry velocity/angle state across behaviors.
+        if (desiredModeOrdinal != kinematicLastModeOrdinal) {
+            kinematicLastModeOrdinal = desiredModeOrdinal
+            kinematicAngleBaseRad = Double.NaN
+            kinematicSecondsSinceBaseUpdate = 0.0
+            kinematicActualAngleRad = Double.NaN
+            kinematicUnlockedAngleRad = Double.NaN
+            kinematicUnlockedOmegaRadPerSec = 0.0
+            kinematicHasLastTargetRotWorld = false
+        }
+
+        // Kinematic drive (applies to both modes). This makes the bearing angle unmovable by weight/CoG, and ensures
+        // we don't accumulate "missed" rotation when blocked by collisions.
+        if (shouldFollowAngle) {
+            val baseTargetAngleRad = if (physAligning) 0.0 else Math.toRadians(physTargetAngle)
+            val targetAngularVelocity = if (physAligning) 0.0 else desiredAngleOmega
+            if (applyKinematicFollowAngle(
+                subShip = subPhysShip,
+                mainShip = mainPhysShip,
+                bearingAxis = axis,
+                baseTargetAngleRad = baseTargetAngleRad,
+                targetAngularVelocity = targetAngularVelocity,
+                subLocalPos = subLocalPos,
+                mainLocalPos = mainLocalPos,
+                dtSeconds = dtSeconds,
+            )) return
+        } else {
+            if (applyKinematicUnlocked(
+                subShip = subPhysShip,
+                mainShip = mainPhysShip,
+                bearingAxis = axis,
+                desiredAngularVelocity = desiredAngularVelocity,
+                subLocalPos = subLocalPos,
+                mainLocalPos = mainLocalPos,
+                dtSeconds = dtSeconds,
+            )) return
         }
 
         // Drive revolute rotation via torque instead of the built-in velocity drive.
         if (driveWarmupTicks > 0) {
             driveWarmupTicks--
             return
-        }
-        val dtSeconds = if (this::dimension.isInitialized) {
-            ClockworkMod.getLastPhysDeltaSeconds(dimension)
-        } else {
-            1.0 / 60.0
         }
 
         val torque = if (shouldFollowAngle) {
@@ -820,6 +871,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         ticks++
         if (level!!.isClientSide) clientAngleDiff /= 2f
         val mode = movementMode?.get() ?: PhysBearingRotationMode.UNLOCKED
+        val speedNow = getSpeed()
         if (!level!!.isClientSide) {
             if (isRunning && originalDirection == null && level!!.getBlockState(worldPosition).block is BearingBlock) {
                 originalDirection = blockState.getValue(BearingBlock.FACING)
@@ -870,7 +922,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         if (shiptraptionID == NO_SHIPTRAPTION_ID) {
             targetAngle = 0f
             targetAngleUnwrapped = 0.0
-        } else if (jointID != -1) {
+        } else {
             val angularSpeed = -getActualAngularSpeed()
             var diff = 0.0f
 
@@ -918,6 +970,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
 
         if (!level!!.isClientSide) {
+            lastSpeed = speedNow
             desiredModeOrdinal = mode.ordinal
             desiredAngularVelocity = if (mode != PhysBearingRotationMode.FOLLOW_ANGLE && !aligning && abs(getSpeed()) > 0.0f) {
                 getRealisticAngularSpeed()
@@ -990,6 +1043,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         private const val ANGLE_FOLLOW_KD: Double = 2.0 * ANGLE_FOLLOW_WN * ANGLE_FOLLOW_ZETA
         private const val JOINT_MATCH_POS_TOLERANCE: Double = 1e-3
         private const val JOINT_MATCH_ROT_DOT_TOLERANCE: Double = 1e-5
+        private val MAX_JOINT_FORCE_TORQUE: VSJointMaxForceTorque = VSJointMaxForceTorque(1.0E10F, 1.0E10F)
 
         //tolerance is in degrees
         @JvmStatic
@@ -1047,6 +1101,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         mainLocalPos: Vector3dc,
         dtSeconds: Double,
     ): Vector3d {
+        // UNLOCKED mode should free-spin when there is no rotation input.
+        if (kotlin.math.abs(desiredAngularVelocity) <= 1e-6f) return Vector3d()
+
         // Axis in world space
         val axisGlobal = Vector3d(bearingAxis)
         mainShip?.transform?.shipToWorldRotation?.transform(axisGlobal)
@@ -1093,5 +1150,205 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             mainShip != null && !mainShip.isStatic -> angularInertia(mainShip, mainLocalPos)
             else -> 0.0
         }
+    }
+
+    private fun clearKinematicTarget(subShip: PhysShip) {
+        val internal = subShip as? VsiPhysShip ?: return
+        if (subShip.isStatic) {
+            subShip.isStatic = false
+        }
+        internal.kinematicTarget = null
+        kinematicAngleBaseRad = Double.NaN
+        kinematicSecondsSinceBaseUpdate = 0.0
+        kinematicActualAngleRad = Double.NaN
+        kinematicUnlockedAngleRad = Double.NaN
+        kinematicUnlockedOmegaRadPerSec = 0.0
+        kinematicHasLastTargetRotWorld = false
+    }
+
+    private fun applyKinematicQuaternionContinuity(rotWorld: Quaterniond): Quaterniond {
+        if (kinematicHasLastTargetRotWorld) {
+            val dot = rotWorld.dot(kinematicLastTargetRotWorld)
+            if (dot < 0.0) {
+                rotWorld.set(-rotWorld.x(), -rotWorld.y(), -rotWorld.z(), -rotWorld.w())
+            }
+        }
+        kinematicLastTargetRotWorld.set(rotWorld)
+        kinematicHasLastTargetRotWorld = true
+        return rotWorld
+    }
+
+    private fun applyKinematicFollowAngle(
+        subShip: PhysShip,
+        mainShip: PhysShip?,
+        bearingAxis: Vector3dc,
+        baseTargetAngleRad: Double,
+        targetAngularVelocity: Double,
+        subLocalPos: Vector3dc,
+        mainLocalPos: Vector3dc,
+        dtSeconds: Double,
+    ): Boolean {
+        val internal = subShip as? VsiPhysShip ?: return false
+
+        // Kinematic ships must be marked static.
+        subShip.isStatic = true
+
+        val predictedAngleRad = computeContinuousKinematicAngle(
+            baseTargetAngleRad = baseTargetAngleRad,
+            targetAngularVelocity = targetAngularVelocity,
+            dtSeconds = dtSeconds,
+        )
+
+        val actualAngleWrapped = getAngle(bearingAxis, subShip.transform, mainShip?.transform)
+        val actualAngleRad = unwrapAngleNear(actualAngleWrapped, kinematicActualAngleRad).also { kinematicActualAngleRad = it }
+
+        val maxErrorRad = max(
+            Math.toRadians(FOLLOW_ANGLE_TARGET_ERROR_MIN_DEG),
+            kotlin.math.abs(targetAngularVelocity) * 0.05,
+        )
+        val targetAngleRad = actualAngleRad +
+            (predictedAngleRad - actualAngleRad).coerceIn(-maxErrorRad, maxErrorRad)
+
+        // If we're clamping (typically because rotation is blocked by collisions), reset the extrapolation base so we
+        // don't "wind up" a huge predicted angle that would take forever to unwind later.
+        if (kotlin.math.abs(targetAngleRad - predictedAngleRad) > 1e-9) {
+            kinematicAngleBaseRad = targetAngleRad
+            kinematicSecondsSinceBaseUpdate = 0.0
+        }
+
+        val mainRotWorld: Quaterniondc = mainShip?.transform?.shipToWorldRotation ?: Quaterniond()
+        // Use a 4π wrap instead of 2π so continuous spinning doesn't introduce quaternion sign flips.
+        val angleForQuat = Math.IEEEremainder(targetAngleRad, Math.PI * 4.0)
+        val relRot = Quaterniond(AxisAngle4d(angleForQuat, bearingAxis.get(Vector3d())))
+        val subRotWorld = applyKinematicQuaternionContinuity(Quaterniond(mainRotWorld).mul(relRot).normalize())
+
+        val mainAnchorWorld = if (mainShip != null) {
+            mainShip.transform.shipToWorld.transformPosition(mainLocalPos, Vector3d())
+        } else {
+            Vector3d(mainLocalPos)
+        }
+
+        // Solve positionInWorld so that the joint anchor positions coincide in world space.
+        val offsetShip = Vector3d(subLocalPos)
+            .sub(subShip.transform.positionInModel, Vector3d())
+            .mul(subShip.transform.shipToWorldScaling)
+        val offsetWorld = subRotWorld.transform(offsetShip, Vector3d())
+        val subPosWorld = mainAnchorWorld.sub(offsetWorld, Vector3d())
+
+        internal.kinematicTarget = PhysPoseImpl(subPosWorld, subRotWorld)
+        return true
+    }
+
+    private fun applyKinematicUnlocked(
+        subShip: PhysShip,
+        mainShip: PhysShip?,
+        bearingAxis: Vector3dc,
+        desiredAngularVelocity: Float,
+        subLocalPos: Vector3dc,
+        mainLocalPos: Vector3dc,
+        dtSeconds: Double,
+    ): Boolean {
+        val internal = subShip as? VsiPhysShip ?: return false
+        val hasInput = kotlin.math.abs(desiredAngularVelocity) > 1e-6f
+
+        val axisGlobal = Vector3d(bearingAxis)
+        mainShip?.transform?.shipToWorldRotation?.transform(axisGlobal)
+        val omegaRelative = Vector3d(subShip.angularVelocity).also { rel ->
+            if (mainShip != null && !mainShip.isStatic) rel.sub(mainShip.angularVelocity)
+        }
+
+        val actualAngleWrapped = getAngle(bearingAxis, subShip.transform, mainShip?.transform)
+        val actualAngleRad = unwrapAngleNear(actualAngleWrapped, kinematicActualAngleRad).also { kinematicActualAngleRad = it }
+
+        if (kinematicUnlockedAngleRad.isNaN()) {
+            kinematicUnlockedAngleRad = actualAngleRad
+            // If we enter UNLOCKED with no input, preserve existing angular velocity so it can free-spin.
+            if (!hasInput) {
+                kinematicUnlockedOmegaRadPerSec = axisGlobal.dot(omegaRelative)
+            }
+        }
+
+        if (hasInput) {
+            // Match UNLOCKED torque-mode sign convention.
+            kinematicUnlockedOmegaRadPerSec = -desiredAngularVelocity.toDouble()
+        }
+
+        // Kinematic ships must be marked static.
+        subShip.isStatic = true
+
+        kinematicUnlockedAngleRad += kinematicUnlockedOmegaRadPerSec * dtSeconds
+
+        val maxErrorRad = max(
+            Math.toRadians(FOLLOW_ANGLE_TARGET_ERROR_MIN_DEG),
+            kotlin.math.abs(kinematicUnlockedOmegaRadPerSec) * 0.05,
+        )
+        val targetAngleRad = actualAngleRad +
+            (kinematicUnlockedAngleRad - actualAngleRad).coerceIn(-maxErrorRad, maxErrorRad)
+
+        // If we're clamping (typically because rotation is blocked by collisions), prevent wind-up.
+        if (kotlin.math.abs(targetAngleRad - kinematicUnlockedAngleRad) > 1e-9) {
+            kinematicUnlockedAngleRad = targetAngleRad
+            if (!hasInput) {
+                kinematicUnlockedOmegaRadPerSec = 0.0
+            }
+        }
+
+        val mainRotWorld: Quaterniondc = mainShip?.transform?.shipToWorldRotation ?: Quaterniond()
+        val angleForQuat = Math.IEEEremainder(targetAngleRad, Math.PI * 4.0)
+        val relRot = Quaterniond(AxisAngle4d(angleForQuat, bearingAxis.get(Vector3d())))
+        val subRotWorld = applyKinematicQuaternionContinuity(Quaterniond(mainRotWorld).mul(relRot).normalize())
+
+        val mainAnchorWorld = if (mainShip != null) {
+            mainShip.transform.shipToWorld.transformPosition(mainLocalPos, Vector3d())
+        } else {
+            Vector3d(mainLocalPos)
+        }
+
+        // Solve positionInWorld so that the joint anchor positions coincide in world space.
+        val offsetShip = Vector3d(subLocalPos)
+            .sub(subShip.transform.positionInModel, Vector3d())
+            .mul(subShip.transform.shipToWorldScaling)
+        val offsetWorld = subRotWorld.transform(offsetShip, Vector3d())
+        val subPosWorld = mainAnchorWorld.sub(offsetWorld, Vector3d())
+
+        internal.kinematicTarget = PhysPoseImpl(subPosWorld, subRotWorld)
+        return true
+    }
+
+    private fun computeContinuousKinematicAngle(
+        baseTargetAngleRad: Double,
+        targetAngularVelocity: Double,
+        dtSeconds: Double,
+    ): Double {
+        if (kinematicAngleBaseRad.isNaN()) {
+            kinematicAngleBaseRad = baseTargetAngleRad
+            kinematicSecondsSinceBaseUpdate = 0.0
+            return baseTargetAngleRad
+        }
+
+        kinematicSecondsSinceBaseUpdate += dtSeconds
+
+        val baseDelta = baseTargetAngleRad - kinematicAngleBaseRad
+        if (abs(baseDelta) > 1e-12) {
+            if (abs(targetAngularVelocity) > 1e-9) {
+                val expectedDt = baseDelta / targetAngularVelocity
+                if (expectedDt.isFinite()) {
+                    kinematicSecondsSinceBaseUpdate = (kinematicSecondsSinceBaseUpdate - expectedDt).coerceAtLeast(0.0)
+                } else {
+                    kinematicSecondsSinceBaseUpdate = 0.0
+                }
+            } else {
+                kinematicSecondsSinceBaseUpdate = 0.0
+            }
+            kinematicAngleBaseRad = baseTargetAngleRad
+        }
+
+        return kinematicAngleBaseRad + targetAngularVelocity * kinematicSecondsSinceBaseUpdate
+    }
+
+    private fun unwrapAngleNear(wrappedAngleRad: Double, referenceAngleRad: Double): Double {
+        if (!referenceAngleRad.isFinite()) return wrappedAngleRad
+        val twoPi = Math.PI * 2.0
+        return wrappedAngleRad + twoPi * Math.round((referenceAngleRad - wrappedAngleRad) / twoPi)
     }
 }
