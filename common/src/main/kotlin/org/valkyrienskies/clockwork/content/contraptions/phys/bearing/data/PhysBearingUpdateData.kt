@@ -4,4 +4,5 @@ data class PhysBearingUpdateData(
     val bearingAngle: Double,
     val bearingRPM: Float,
     val locked: Boolean,
+    val aligning: Boolean,
 )
