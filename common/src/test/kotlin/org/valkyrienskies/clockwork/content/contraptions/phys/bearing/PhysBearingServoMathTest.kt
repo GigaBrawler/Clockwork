@@ -1,10 +1,13 @@
 package org.valkyrienskies.clockwork.content.contraptions.phys.bearing
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.sign
+import kotlin.math.sqrt
 
 class PhysBearingServoMathTest {
     @Test
@@ -58,6 +61,7 @@ class PhysBearingServoMathTest {
         assertTrue(low.brakeRate < mid.brakeRate && mid.brakeRate < high.brakeRate)
         assertTrue(low.maxBrakeAlpha < mid.maxBrakeAlpha && mid.maxBrakeAlpha < high.maxBrakeAlpha)
         assertTrue(low.trackOmegaGain < mid.trackOmegaGain && mid.trackOmegaGain < high.trackOmegaGain)
+        assertTrue(low.trackPosAssistGain < mid.trackPosAssistGain && mid.trackPosAssistGain < high.trackPosAssistGain)
         assertTrue(
             low.trackPosAssistOmegaLimit < mid.trackPosAssistOmegaLimit &&
                 mid.trackPosAssistOmegaLimit < high.trackPosAssistOmegaLimit
@@ -65,56 +69,58 @@ class PhysBearingServoMathTest {
     }
 
     @Test
-    fun strengthMonotonicHoldAuthority() {
-        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
-        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
-        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
-
-        assertTrue(low.holdPosGain < mid.holdPosGain && mid.holdPosGain < high.holdPosGain)
-        assertTrue(low.holdOmegaGain < mid.holdOmegaGain && mid.holdOmegaGain < high.holdOmegaGain)
-        assertTrue(low.holdPosOmegaLimit < mid.holdPosOmegaLimit && mid.holdPosOmegaLimit < high.holdPosOmegaLimit)
-        assertTrue(low.holdMaxAlpha < mid.holdMaxAlpha && mid.holdMaxAlpha < high.holdMaxAlpha)
+    fun holdDampingFloorRespected() {
+        for (strength in listOf(0.0, 0.5, 1.0)) {
+            val p = PhysBearingServoMath.mapFollowStrength(strength01 = strength, sliderScale = 1.0)
+            val kdEff = PhysBearingServoMath.holdKdWithDampingFloor(
+                holdKpAlpha = p.holdKpAlpha,
+                holdKdAlphaMapped = p.holdKdAlpha,
+                holdDampingZetaMin = p.holdDampingZetaMin
+            )
+            val kdFloor = 2.0 * p.holdDampingZetaMin * sqrt(max(p.holdKpAlpha, 1.0e-9))
+            assertTrue(kdEff + 1.0e-9 >= kdFloor)
+        }
     }
 
     @Test
-    fun holdPhaseRestoringAlpha() {
+    fun holdPdRestoringAndDissipative() {
         val p = PhysBearingServoMath.mapFollowStrength(strength01 = 0.75, sliderScale = 1.0)
-        val deadbandError = 0.002
-        val deadbandOmega = 0.02
+        val deadbandError = 0.0015
+        val deadbandOmega = 0.015
 
         val alphaPositiveError = PhysBearingServoMath.computeHoldAlpha(
             holdErrorRad = 0.10,
             omegaActualRadSec = 0.0,
-            holdPosGain = p.holdPosGain,
-            holdOmegaGain = p.holdOmegaGain,
-            holdPosOmegaLimit = p.holdPosOmegaLimit,
+            holdKpAlpha = p.holdKpAlpha,
+            holdKdAlphaMapped = p.holdKdAlpha,
+            holdDampingZetaMin = p.holdDampingZetaMin,
             holdErrorDeadbandRad = deadbandError,
             holdOmegaDeadbandRadSec = deadbandOmega
         )
         val alphaNegativeError = PhysBearingServoMath.computeHoldAlpha(
             holdErrorRad = -0.10,
             omegaActualRadSec = 0.0,
-            holdPosGain = p.holdPosGain,
-            holdOmegaGain = p.holdOmegaGain,
-            holdPosOmegaLimit = p.holdPosOmegaLimit,
+            holdKpAlpha = p.holdKpAlpha,
+            holdKdAlphaMapped = p.holdKdAlpha,
+            holdDampingZetaMin = p.holdDampingZetaMin,
             holdErrorDeadbandRad = deadbandError,
             holdOmegaDeadbandRadSec = deadbandOmega
         )
         val alphaPositiveOmega = PhysBearingServoMath.computeHoldAlpha(
             holdErrorRad = 0.0,
             omegaActualRadSec = 0.20,
-            holdPosGain = p.holdPosGain,
-            holdOmegaGain = p.holdOmegaGain,
-            holdPosOmegaLimit = p.holdPosOmegaLimit,
+            holdKpAlpha = p.holdKpAlpha,
+            holdKdAlphaMapped = p.holdKdAlpha,
+            holdDampingZetaMin = p.holdDampingZetaMin,
             holdErrorDeadbandRad = deadbandError,
             holdOmegaDeadbandRadSec = deadbandOmega
         )
         val alphaNegativeOmega = PhysBearingServoMath.computeHoldAlpha(
             holdErrorRad = 0.0,
             omegaActualRadSec = -0.20,
-            holdPosGain = p.holdPosGain,
-            holdOmegaGain = p.holdOmegaGain,
-            holdPosOmegaLimit = p.holdPosOmegaLimit,
+            holdKpAlpha = p.holdKpAlpha,
+            holdKdAlphaMapped = p.holdKdAlpha,
+            holdDampingZetaMin = p.holdDampingZetaMin,
             holdErrorDeadbandRad = deadbandError,
             holdOmegaDeadbandRadSec = deadbandOmega
         )
@@ -126,32 +132,232 @@ class PhysBearingServoMathTest {
     }
 
     @Test
-    fun holdDeadbandNoChatter() {
-        val p = PhysBearingServoMath.mapFollowStrength(strength01 = 0.6, sliderScale = 1.0)
-        val deadbandError = 0.002
-        val deadbandOmega = 0.02
-        val alphaDeadband = PhysBearingServoMath.computeHoldAlpha(
-            holdErrorRad = deadbandError * 0.5,
-            omegaActualRadSec = deadbandOmega * 0.5,
-            holdPosGain = p.holdPosGain,
-            holdOmegaGain = p.holdOmegaGain,
-            holdPosOmegaLimit = p.holdPosOmegaLimit,
-            holdErrorDeadbandRad = deadbandError,
-            holdOmegaDeadbandRadSec = deadbandOmega
-        )
-        val alphaOutsideBand = PhysBearingServoMath.computeHoldAlpha(
-            holdErrorRad = deadbandError * 1.5,
-            omegaActualRadSec = deadbandOmega * 1.5,
-            holdPosGain = p.holdPosGain,
-            holdOmegaGain = p.holdOmegaGain,
-            holdPosOmegaLimit = p.holdPosOmegaLimit,
-            holdErrorDeadbandRad = deadbandError,
-            holdOmegaDeadbandRadSec = deadbandOmega
+    fun phaseCaptureHysteresisNoThrash() {
+        val captureOmega = 0.08
+        val captureTicks = 3
+        val emergencyOmega = 1.8
+        val emergencyTicks = 4
+        var state = PhysBearingServoMath.FollowPhaseState(
+            phase = PhysBearingServoMath.FollowPhase.BRAKE_DECEL,
+            holdLatched = false,
+            captureTicks = 0,
+            emergencyTicks = 0
         )
 
-        assertTrue(alphaDeadband == 0.0)
-        assertTrue(alphaOutsideBand.isFinite())
-        assertTrue(abs(alphaOutsideBand) < p.holdOmegaGain * p.holdPosOmegaLimit + 10.0)
+        repeat(captureTicks - 1) {
+            state = PhysBearingServoMath.stepFollowPhase(
+                trackActive = false,
+                omegaAbsRadSec = captureOmega * 0.75,
+                previous = state,
+                captureOmegaRadSec = captureOmega,
+                captureTicksRequired = captureTicks,
+                emergencyReleaseOmegaRadSec = emergencyOmega,
+                emergencyReleaseTicksRequired = emergencyTicks
+            )
+            assertEquals(PhysBearingServoMath.FollowPhase.BRAKE_DECEL, state.phase)
+        }
+        state = PhysBearingServoMath.stepFollowPhase(
+            trackActive = false,
+            omegaAbsRadSec = captureOmega * 0.75,
+            previous = state,
+            captureOmegaRadSec = captureOmega,
+            captureTicksRequired = captureTicks,
+            emergencyReleaseOmegaRadSec = emergencyOmega,
+            emergencyReleaseTicksRequired = emergencyTicks
+        )
+        assertEquals(PhysBearingServoMath.FollowPhase.BRAKE_HOLD, state.phase)
+        assertTrue(state.holdLatched)
+
+        for (omega in listOf(0.02, 0.14, 0.04, 0.11, 0.06, 0.13, 0.05)) {
+            state = PhysBearingServoMath.stepFollowPhase(
+                trackActive = false,
+                omegaAbsRadSec = omega,
+                previous = state,
+                captureOmegaRadSec = captureOmega,
+                captureTicksRequired = captureTicks,
+                emergencyReleaseOmegaRadSec = emergencyOmega,
+                emergencyReleaseTicksRequired = emergencyTicks
+            )
+            assertEquals(PhysBearingServoMath.FollowPhase.BRAKE_HOLD, state.phase)
+            assertTrue(state.holdLatched)
+        }
+
+        repeat(emergencyTicks - 1) {
+            state = PhysBearingServoMath.stepFollowPhase(
+                trackActive = false,
+                omegaAbsRadSec = emergencyOmega + 0.2,
+                previous = state,
+                captureOmegaRadSec = captureOmega,
+                captureTicksRequired = captureTicks,
+                emergencyReleaseOmegaRadSec = emergencyOmega,
+                emergencyReleaseTicksRequired = emergencyTicks
+            )
+            assertEquals(PhysBearingServoMath.FollowPhase.BRAKE_HOLD, state.phase)
+        }
+        state = PhysBearingServoMath.stepFollowPhase(
+            trackActive = false,
+            omegaAbsRadSec = emergencyOmega + 0.2,
+            previous = state,
+            captureOmegaRadSec = captureOmega,
+            captureTicksRequired = captureTicks,
+            emergencyReleaseOmegaRadSec = emergencyOmega,
+            emergencyReleaseTicksRequired = emergencyTicks
+        )
+        assertEquals(PhysBearingServoMath.FollowPhase.BRAKE_DECEL, state.phase)
+        assertFalse(state.holdLatched)
+    }
+
+    @Test
+    fun ringdownBoostActivatesOnFlipSequence() {
+        val durationTicks = 8
+        var ringTicks = 0
+        var errorSign = 0
+        val boost = 1.6
+
+        run {
+            val state = PhysBearingServoMath.updateHoldRingDown(
+                currentTicks = ringTicks,
+                previousErrorSign = errorSign,
+                holdErrorRad = 0.03,
+                omegaActualRadSec = 0.20,
+                errorMinRad = 0.005,
+                omegaMinRadSec = 0.08,
+                durationTicks = durationTicks
+            )
+            ringTicks = state.ticks
+            errorSign = state.errorSign
+        }
+        assertEquals(0, ringTicks)
+
+        run {
+            val state = PhysBearingServoMath.updateHoldRingDown(
+                currentTicks = ringTicks,
+                previousErrorSign = errorSign,
+                holdErrorRad = -0.03,
+                omegaActualRadSec = 0.20,
+                errorMinRad = 0.005,
+                omegaMinRadSec = 0.08,
+                durationTicks = durationTicks
+            )
+            ringTicks = state.ticks
+            errorSign = state.errorSign
+        }
+        assertEquals(durationTicks, ringTicks)
+        assertTrue(PhysBearingServoMath.holdRingDownKdMultiplier(ringTicks, boost) > 1.0)
+
+        repeat(durationTicks) {
+            val state = PhysBearingServoMath.updateHoldRingDown(
+                currentTicks = ringTicks,
+                previousErrorSign = errorSign,
+                holdErrorRad = 0.0,
+                omegaActualRadSec = 0.0,
+                errorMinRad = 0.005,
+                omegaMinRadSec = 0.08,
+                durationTicks = durationTicks
+            )
+            ringTicks = state.ticks
+            errorSign = state.errorSign
+        }
+        assertEquals(0, ringTicks)
+        assertEquals(1.0, PhysBearingServoMath.holdRingDownKdMultiplier(ringTicks, boost))
+    }
+
+    @Test
+    fun strengthMonotonicRigidHold() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(low.holdKpAlpha < mid.holdKpAlpha && mid.holdKpAlpha < high.holdKpAlpha)
+        assertTrue(low.holdKdAlpha < mid.holdKdAlpha && mid.holdKdAlpha < high.holdKdAlpha)
+        assertTrue(low.holdDampingZetaMin <= mid.holdDampingZetaMin && mid.holdDampingZetaMin <= high.holdDampingZetaMin)
+        assertTrue(low.holdMaxAlpha < mid.holdMaxAlpha && mid.holdMaxAlpha < high.holdMaxAlpha)
+        assertTrue(
+            low.holdRingDownKdBoost <= mid.holdRingDownKdBoost &&
+                mid.holdRingDownKdBoost <= high.holdRingDownKdBoost
+        )
+
+        val kdLow = PhysBearingServoMath.holdKdWithDampingFloor(low.holdKpAlpha, low.holdKdAlpha, low.holdDampingZetaMin)
+        val kdMid = PhysBearingServoMath.holdKdWithDampingFloor(mid.holdKpAlpha, mid.holdKdAlpha, mid.holdDampingZetaMin)
+        val kdHigh = PhysBearingServoMath.holdKdWithDampingFloor(high.holdKpAlpha, high.holdKdAlpha, high.holdDampingZetaMin)
+        assertTrue(kdLow <= kdMid && kdMid <= kdHigh)
+    }
+
+    @Test
+    fun smallNonzeroCommandIsActive() {
+        val eps = 1.0e-3
+        assertFalse(PhysBearingServoMath.isFollowCommandActive(0.0, eps))
+        assertFalse(PhysBearingServoMath.isFollowCommandActive(5.0e-4, eps))
+        assertTrue(PhysBearingServoMath.isFollowCommandActive(1.0e-3, eps))
+        assertTrue(PhysBearingServoMath.isFollowCommandActive(2.5e-3, eps))
+    }
+
+    @Test
+    fun rigidRestHysteresisNoChatter() {
+        var state = PhysBearingServoMath.HysteresisLatchState(active = false, ticks = 0)
+        val enterTicks = 4
+
+        val jitterSequence = listOf(true, false, true, false, true, false, true, false)
+        for (enter in jitterSequence) {
+            state = PhysBearingServoMath.stepHysteresisLatch(
+                previouslyActive = state.active,
+                previousTicks = state.ticks,
+                eligible = true,
+                enterCondition = enter,
+                exitCondition = false,
+                enterTicksRequired = enterTicks
+            )
+            assertFalse(state.active)
+        }
+    }
+
+    @Test
+    fun rigidRestExitOnDisturbance() {
+        var state = PhysBearingServoMath.HysteresisLatchState(active = true, ticks = 5)
+        state = PhysBearingServoMath.stepHysteresisLatch(
+            previouslyActive = state.active,
+            previousTicks = state.ticks,
+            eligible = true,
+            enterCondition = true,
+            exitCondition = false,
+            enterTicksRequired = 4
+        )
+        assertTrue(state.active)
+
+        state = PhysBearingServoMath.stepHysteresisLatch(
+            previouslyActive = state.active,
+            previousTicks = state.ticks,
+            eligible = true,
+            enterCondition = false,
+            exitCondition = true,
+            enterTicksRequired = 4
+        )
+        assertFalse(state.active)
+    }
+
+    @Test
+    fun trackCommandNotAuthorityScaled() {
+        val command = 18.0
+        val targetNoAssist = PhysBearingServoMath.computeTrackOmegaTarget(
+            commandOmegaRadSec = command,
+            errorRad = 0.0,
+            posAssistGain = 10.0,
+            posAssistOmegaLimit = 100.0,
+            maxOmegaRadSec = 80.0
+        )
+        val hypotheticalAuthorityScaled = command * 0.25
+        assertEquals(command, targetNoAssist, 1.0e-9)
+        assertTrue(abs(targetNoAssist - hypotheticalAuthorityScaled) > 1.0e-6)
+    }
+
+    @Test
+    fun strength100RestFloorHighest() {
+        val low = PhysBearingServoMath.holdRestAuthorityFloor(0.0, rigidBlend01 = 0.0)
+        val mid = PhysBearingServoMath.holdRestAuthorityFloor(0.5, rigidBlend01 = 0.0)
+        val high = PhysBearingServoMath.holdRestAuthorityFloor(1.0, rigidBlend01 = 0.0)
+        val highRigid = PhysBearingServoMath.holdRestAuthorityFloor(1.0, rigidBlend01 = 1.0)
+        assertTrue(low <= mid && mid <= high)
+        assertTrue(high <= highRigid)
     }
 
     @Test
