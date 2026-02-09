@@ -293,6 +293,89 @@ class PhysBearingServoMathTest {
     }
 
     @Test
+    fun stallThresholdBoundedNoFalseHighCmd() {
+        val highCmdDelta = 255.0 * Math.PI / 180.0
+        val eps = PhysBearingServoMath.boundedStallEpsilonRad(
+            cmdDeltaRad = highCmdDelta,
+            baseEpsRad = 1.0e-4,
+            commandFraction = 4.0e-4,
+            maxEpsRad = 0.004
+        )
+        assertTrue(eps in 1.0e-4..0.004)
+        assertTrue(eps < 0.01)
+    }
+
+    @Test
+    fun stallUnlatchOnMotionOrCommandStep() {
+        var state = PhysBearingServoMath.FollowStallState(stalled = false, stallTicks = 0, clearTicks = 0, graceTicks = 0)
+        repeat(14) {
+            state = PhysBearingServoMath.stepFollowStallState(
+                previous = state,
+                stallCountEligible = true,
+                clearMotionEligible = false,
+                commandStep = false,
+                stallTicksRequired = 8,
+                clearTicksRequired = 3,
+                graceTicksOnCommandStep = 6
+            )
+        }
+        assertTrue(state.stalled)
+
+        state = PhysBearingServoMath.stepFollowStallState(
+            previous = state,
+            stallCountEligible = false,
+            clearMotionEligible = false,
+            commandStep = true,
+            stallTicksRequired = 8,
+            clearTicksRequired = 3,
+            graceTicksOnCommandStep = 6
+        )
+        assertFalse(state.stalled)
+
+        repeat(14) {
+            state = PhysBearingServoMath.stepFollowStallState(
+                previous = state,
+                stallCountEligible = true,
+                clearMotionEligible = false,
+                commandStep = false,
+                stallTicksRequired = 8,
+                clearTicksRequired = 3,
+                graceTicksOnCommandStep = 6
+            )
+        }
+        assertTrue(state.stalled)
+        repeat(3) {
+            state = PhysBearingServoMath.stepFollowStallState(
+                previous = state,
+                stallCountEligible = false,
+                clearMotionEligible = true,
+                commandStep = false,
+                stallTicksRequired = 8,
+                clearTicksRequired = 3,
+                graceTicksOnCommandStep = 6
+            )
+        }
+        assertFalse(state.stalled)
+    }
+
+    @Test
+    fun trackAuthorityNotOmegaThrottled() {
+        val low = PhysBearingServoMath.computeTrackAuthority(
+            chainFactor = 0.55,
+            offAxisFactor = 0.80,
+            relVelFactor = 0.90,
+            minAuthority = 0.18
+        )
+        val high = PhysBearingServoMath.computeTrackAuthority(
+            chainFactor = 0.55,
+            offAxisFactor = 0.80,
+            relVelFactor = 0.90,
+            minAuthority = 0.18
+        )
+        assertEquals(low, high, 1.0e-12)
+    }
+
+    @Test
     fun rigidRestHysteresisNoChatter() {
         var state = PhysBearingServoMath.HysteresisLatchState(active = false, ticks = 0)
         val enterTicks = 4
@@ -336,7 +419,7 @@ class PhysBearingServoMathTest {
     }
 
     @Test
-    fun trackCommandNotAuthorityScaled() {
+    fun trackCommandFidelityNoChainSpeedShaping() {
         val command = 18.0
         val targetNoAssist = PhysBearingServoMath.computeTrackOmegaTarget(
             commandOmegaRadSec = command,
@@ -358,6 +441,62 @@ class PhysBearingServoMathTest {
         val highRigid = PhysBearingServoMath.holdRestAuthorityFloor(1.0, rigidBlend01 = 1.0)
         assertTrue(low <= mid && mid <= high)
         assertTrue(high <= highRigid)
+    }
+
+    @Test
+    fun rigidHingeMicroHysteresisNoChatter() {
+        var state = PhysBearingServoMath.HysteresisLatchState(active = false, ticks = 0)
+        val jitter = listOf(true, false, true, false, true, false, true, false)
+        for (enter in jitter) {
+            state = PhysBearingServoMath.stepHysteresisLatch(
+                previouslyActive = state.active,
+                previousTicks = state.ticks,
+                eligible = true,
+                enterCondition = enter,
+                exitCondition = false,
+                enterTicksRequired = 3
+            )
+        }
+        assertFalse(state.active)
+    }
+
+    @Test
+    fun holdMicroNeverZeroOffaxisStiffness() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+        assertTrue(low.holdRestTiltStiffnessFloor > 0.0)
+        assertTrue(mid.holdRestTiltStiffnessFloor > 0.0)
+        assertTrue(high.holdRestTiltStiffnessFloor > 0.0)
+    }
+
+    @Test
+    fun strengthMonotonicFollowCapsAndFloors() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(low.trackAuthorityFloor <= mid.trackAuthorityFloor && mid.trackAuthorityFloor <= high.trackAuthorityFloor)
+        assertTrue(
+            low.trackMaxOmegaStepPerTick <= mid.trackMaxOmegaStepPerTick &&
+                mid.trackMaxOmegaStepPerTick <= high.trackMaxOmegaStepPerTick
+        )
+        assertTrue(low.holdWorldSeatKpBoost <= mid.holdWorldSeatKpBoost && mid.holdWorldSeatKpBoost <= high.holdWorldSeatKpBoost)
+        assertTrue(low.holdWorldSeatKdBoost <= mid.holdWorldSeatKdBoost && mid.holdWorldSeatKdBoost <= high.holdWorldSeatKdBoost)
+        assertTrue(low.holdWorldTiltKpBoost <= mid.holdWorldTiltKpBoost && mid.holdWorldTiltKpBoost <= high.holdWorldTiltKpBoost)
+        assertTrue(low.holdWorldTiltKdBoost <= mid.holdWorldTiltKdBoost && mid.holdWorldTiltKdBoost <= high.holdWorldTiltKdBoost)
+        assertTrue(
+            low.holdWorldTiltAlphaCapScale <= mid.holdWorldTiltAlphaCapScale &&
+                mid.holdWorldTiltAlphaCapScale <= high.holdWorldTiltAlphaCapScale
+        )
+        assertTrue(
+            low.holdWorldTiltAlphaEqCapScale <= mid.holdWorldTiltAlphaEqCapScale &&
+                mid.holdWorldTiltAlphaEqCapScale <= high.holdWorldTiltAlphaEqCapScale
+        )
+        assertTrue(
+            low.holdRestTiltStiffnessFloor <= mid.holdRestTiltStiffnessFloor &&
+                mid.holdRestTiltStiffnessFloor <= high.holdRestTiltStiffnessFloor
+        )
     }
 
     @Test

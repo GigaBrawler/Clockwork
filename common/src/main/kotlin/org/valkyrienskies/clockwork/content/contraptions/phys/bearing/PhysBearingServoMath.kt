@@ -31,6 +31,13 @@ internal object PhysBearingServoMath {
         val ticks: Int
     )
 
+    data class FollowStallState(
+        val stalled: Boolean,
+        val stallTicks: Int,
+        val clearTicks: Int,
+        val graceTicks: Int
+    )
+
     data class FollowStrengthParams(
         val stopTimeSec: Double,
         val brakeRate: Double,
@@ -39,6 +46,8 @@ internal object PhysBearingServoMath {
         val trackOmegaGain: Double,
         val trackPosAssistGain: Double,
         val trackPosAssistOmegaLimit: Double,
+        val trackAuthorityFloor: Double,
+        val trackMaxOmegaStepPerTick: Double,
         val holdKpAlpha: Double,
         val holdKdAlpha: Double,
         val holdDampingZetaMin: Double,
@@ -52,6 +61,13 @@ internal object PhysBearingServoMath {
         val brakeTiltDeadbandScale: Double,
         val chainTorqueScale: Double,
         val chainStiffnessScale: Double,
+        val holdWorldSeatKpBoost: Double,
+        val holdWorldSeatKdBoost: Double,
+        val holdWorldTiltKpBoost: Double,
+        val holdWorldTiltKdBoost: Double,
+        val holdWorldTiltAlphaCapScale: Double,
+        val holdWorldTiltAlphaEqCapScale: Double,
+        val holdRestTiltStiffnessFloor: Double,
     )
 
     fun mapFollowStrength(strength01: Double, sliderScale: Double): FollowStrengthParams {
@@ -65,6 +81,10 @@ internal object PhysBearingServoMath {
         val trackOmegaGain = lerpLog(FOLLOW_TRACK_OMEGA_GAIN_MIN, FOLLOW_TRACK_OMEGA_GAIN_MAX, t) * scale
         val trackPosAssistGain = lerpLog(FOLLOW_TRACK_POS_GAIN_MIN, FOLLOW_TRACK_POS_GAIN_MAX, t) * scale
         val trackPosAssistOmegaLimit = lerpLog(FOLLOW_TRACK_POS_OMEGA_LIMIT_MIN, FOLLOW_TRACK_POS_OMEGA_LIMIT_MAX, t) * scale
+        val trackAuthorityFloor = lerpClamped(FOLLOW_TRACK_AUTH_FLOOR_MIN, FOLLOW_TRACK_AUTH_FLOOR_MAX, t).coerceIn(0.0, 1.0)
+        val trackMaxOmegaStepPerTick =
+            lerpClamped(FOLLOW_TRACK_MAX_OMEGA_STEP_PER_TICK_MIN, FOLLOW_TRACK_MAX_OMEGA_STEP_PER_TICK_MAX, t)
+                .coerceAtLeast(0.0)
 
         val holdKpAlpha = lerpLog(FOLLOW_HOLD_KP_ALPHA_MIN, FOLLOW_HOLD_KP_ALPHA_MAX, t) * scale
         val holdKdAlpha = lerpLog(FOLLOW_HOLD_KD_ALPHA_MIN, FOLLOW_HOLD_KD_ALPHA_MAX, t) * scale
@@ -89,6 +109,17 @@ internal object PhysBearingServoMath {
         val chainStiffnessScale =
             lerpClamped(FOLLOW_CHAIN_STIFFNESS_SCALE_MIN, FOLLOW_CHAIN_STIFFNESS_SCALE_MAX, chainBlend)
                 .coerceIn(0.0, 1.0)
+        val holdWorldSeatKpBoost = lerpClamped(FOLLOW_HOLD_WORLD_SEAT_KP_BOOST_MIN, FOLLOW_HOLD_WORLD_SEAT_KP_BOOST_MAX, t)
+        val holdWorldSeatKdBoost = lerpClamped(FOLLOW_HOLD_WORLD_SEAT_KD_BOOST_MIN, FOLLOW_HOLD_WORLD_SEAT_KD_BOOST_MAX, t)
+        val holdWorldTiltKpBoost = lerpClamped(FOLLOW_HOLD_WORLD_TILT_KP_BOOST_MIN, FOLLOW_HOLD_WORLD_TILT_KP_BOOST_MAX, t)
+        val holdWorldTiltKdBoost = lerpClamped(FOLLOW_HOLD_WORLD_TILT_KD_BOOST_MIN, FOLLOW_HOLD_WORLD_TILT_KD_BOOST_MAX, t)
+        val holdWorldTiltAlphaCapScale =
+            lerpClamped(FOLLOW_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MIN, FOLLOW_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MAX, t)
+        val holdWorldTiltAlphaEqCapScale =
+            lerpClamped(FOLLOW_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MIN, FOLLOW_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MAX, t)
+        val holdRestTiltStiffnessFloor =
+            lerpClamped(FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MIN, FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MAX, t)
+                .coerceIn(0.0, 1.0)
 
         return FollowStrengthParams(
             stopTimeSec = stopTimeSec,
@@ -98,6 +129,8 @@ internal object PhysBearingServoMath {
             trackOmegaGain = trackOmegaGain,
             trackPosAssistGain = trackPosAssistGain,
             trackPosAssistOmegaLimit = trackPosAssistOmegaLimit,
+            trackAuthorityFloor = trackAuthorityFloor,
+            trackMaxOmegaStepPerTick = trackMaxOmegaStepPerTick,
             holdKpAlpha = holdKpAlpha,
             holdKdAlpha = holdKdAlpha,
             holdDampingZetaMin = holdDampingZetaMin,
@@ -110,7 +143,14 @@ internal object PhysBearingServoMath {
             brakeTiltStiffnessFloor = brakeTiltStiffnessFloor,
             brakeTiltDeadbandScale = brakeTiltDeadbandScale,
             chainTorqueScale = chainTorqueScale,
-            chainStiffnessScale = chainStiffnessScale
+            chainStiffnessScale = chainStiffnessScale,
+            holdWorldSeatKpBoost = holdWorldSeatKpBoost,
+            holdWorldSeatKdBoost = holdWorldSeatKdBoost,
+            holdWorldTiltKpBoost = holdWorldTiltKpBoost,
+            holdWorldTiltKdBoost = holdWorldTiltKdBoost,
+            holdWorldTiltAlphaCapScale = holdWorldTiltAlphaCapScale,
+            holdWorldTiltAlphaEqCapScale = holdWorldTiltAlphaEqCapScale,
+            holdRestTiltStiffnessFloor = holdRestTiltStiffnessFloor
         )
     }
 
@@ -123,6 +163,87 @@ internal object PhysBearingServoMath {
     fun isFollowCommandActive(commandAbsOmegaRadSec: Double, epsilonRadSec: Double): Boolean {
         if (!commandAbsOmegaRadSec.isFinite() || !epsilonRadSec.isFinite()) return false
         return commandAbsOmegaRadSec >= epsilonRadSec.coerceAtLeast(0.0)
+    }
+
+    fun boundedStallEpsilonRad(
+        cmdDeltaRad: Double,
+        baseEpsRad: Double,
+        commandFraction: Double,
+        maxEpsRad: Double
+    ): Double {
+        if (!cmdDeltaRad.isFinite() || !baseEpsRad.isFinite() || !commandFraction.isFinite() || !maxEpsRad.isFinite()) return 0.0
+        val base = baseEpsRad.coerceAtLeast(0.0)
+        val maxEps = maxEpsRad.coerceAtLeast(base)
+        val cmdTerm = abs(cmdDeltaRad) * commandFraction.coerceAtLeast(0.0)
+        return (base + cmdTerm).coerceAtMost(maxEps)
+    }
+
+    fun isSignificantCommandStep(
+        previousMagnitude: Double,
+        currentMagnitude: Double,
+        previousSign: Int,
+        currentSign: Int,
+        absoluteStepThreshold: Double,
+        relativeStepThreshold: Double
+    ): Boolean {
+        if (!previousMagnitude.isFinite() || !currentMagnitude.isFinite()) return true
+        if (previousSign != 0 && currentSign != 0 && previousSign != currentSign) return true
+        val prev = abs(previousMagnitude)
+        val curr = abs(currentMagnitude)
+        val absDelta = abs(curr - prev)
+        val absStep = absDelta >= absoluteStepThreshold.coerceAtLeast(0.0)
+        val relBase = max(prev, 1.0e-6)
+        val relStep = (absDelta / relBase) >= relativeStepThreshold.coerceAtLeast(0.0)
+        return absStep || relStep
+    }
+
+    fun stepFollowStallState(
+        previous: FollowStallState,
+        stallCountEligible: Boolean,
+        clearMotionEligible: Boolean,
+        commandStep: Boolean,
+        stallTicksRequired: Int,
+        clearTicksRequired: Int,
+        graceTicksOnCommandStep: Int
+    ): FollowStallState {
+        val stallRequired = stallTicksRequired.coerceAtLeast(1)
+        val clearRequired = clearTicksRequired.coerceAtLeast(1)
+        val graceTicks = if (commandStep) {
+            graceTicksOnCommandStep.coerceAtLeast(0)
+        } else {
+            max(0, previous.graceTicks - 1)
+        }
+
+        if (previous.stalled) {
+            if (commandStep) {
+                return FollowStallState(stalled = false, stallTicks = 0, clearTicks = 0, graceTicks = graceTicks)
+            }
+            val clearTicks = if (clearMotionEligible) previous.clearTicks + 1 else 0
+            if (clearTicks >= clearRequired) {
+                return FollowStallState(stalled = false, stallTicks = 0, clearTicks = 0, graceTicks = graceTicks)
+            }
+            return FollowStallState(stalled = true, stallTicks = 0, clearTicks = clearTicks, graceTicks = graceTicks)
+        }
+
+        val canCount = graceTicks <= 0 && stallCountEligible
+        val stallTicks = if (canCount) previous.stallTicks + 1 else 0
+        val stalled = stallTicks >= stallRequired
+        return if (stalled) {
+            FollowStallState(stalled = true, stallTicks = 0, clearTicks = 0, graceTicks = graceTicks)
+        } else {
+            FollowStallState(stalled = false, stallTicks = stallTicks, clearTicks = 0, graceTicks = graceTicks)
+        }
+    }
+
+    fun computeTrackAuthority(
+        chainFactor: Double,
+        offAxisFactor: Double,
+        relVelFactor: Double,
+        minAuthority: Double
+    ): Double {
+        if (!chainFactor.isFinite() || !offAxisFactor.isFinite() || !relVelFactor.isFinite() || !minAuthority.isFinite()) return 0.0
+        val minA = minAuthority.coerceIn(0.0, 1.0)
+        return (chainFactor * offAxisFactor * relVelFactor).coerceIn(minA, 1.0)
     }
 
     fun computeTrackOmegaTarget(
@@ -381,6 +502,10 @@ internal object PhysBearingServoMath {
     private const val FOLLOW_TRACK_POS_GAIN_MAX = 12.0
     private const val FOLLOW_TRACK_POS_OMEGA_LIMIT_MIN = 2.0
     private const val FOLLOW_TRACK_POS_OMEGA_LIMIT_MAX = 22.0
+    private const val FOLLOW_TRACK_AUTH_FLOOR_MIN = 0.22
+    private const val FOLLOW_TRACK_AUTH_FLOOR_MAX = 0.62
+    private const val FOLLOW_TRACK_MAX_OMEGA_STEP_PER_TICK_MIN = 1.4
+    private const val FOLLOW_TRACK_MAX_OMEGA_STEP_PER_TICK_MAX = 3.2
     private const val FOLLOW_HOLD_KP_ALPHA_MIN = 10.0
     private const val FOLLOW_HOLD_KP_ALPHA_MAX = 90.0
     private const val FOLLOW_HOLD_KD_ALPHA_MIN = 2.0
@@ -409,6 +534,20 @@ internal object PhysBearingServoMath {
     private const val FOLLOW_CHAIN_TORQUE_SCALE_MAX = 0.85
     private const val FOLLOW_CHAIN_STIFFNESS_SCALE_MIN = 0.35
     private const val FOLLOW_CHAIN_STIFFNESS_SCALE_MAX = 0.75
+    private const val FOLLOW_HOLD_WORLD_SEAT_KP_BOOST_MIN = 1.05
+    private const val FOLLOW_HOLD_WORLD_SEAT_KP_BOOST_MAX = 1.45
+    private const val FOLLOW_HOLD_WORLD_SEAT_KD_BOOST_MIN = 1.10
+    private const val FOLLOW_HOLD_WORLD_SEAT_KD_BOOST_MAX = 1.65
+    private const val FOLLOW_HOLD_WORLD_TILT_KP_BOOST_MIN = 1.05
+    private const val FOLLOW_HOLD_WORLD_TILT_KP_BOOST_MAX = 1.40
+    private const val FOLLOW_HOLD_WORLD_TILT_KD_BOOST_MIN = 1.12
+    private const val FOLLOW_HOLD_WORLD_TILT_KD_BOOST_MAX = 1.75
+    private const val FOLLOW_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MIN = 1.05
+    private const val FOLLOW_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MAX = 1.45
+    private const val FOLLOW_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MIN = 1.05
+    private const val FOLLOW_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MAX = 1.38
+    private const val FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MIN = 0.32
+    private const val FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MAX = 0.64
     private const val FOLLOW_HOLD_AUTH_FLOOR_MIN = 0.48
     private const val FOLLOW_HOLD_AUTH_FLOOR_MAX = 0.78
     private const val FOLLOW_HOLD_AUTH_FLOOR_RIGID_BOOST = 0.15
