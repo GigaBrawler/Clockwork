@@ -1,5 +1,6 @@
 package org.valkyrienskies.clockwork.content.contraptions.phys.bearing
 
+import org.joml.Vector3d
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -708,6 +709,168 @@ class PhysBearingServoMathTest {
                 assertTrue(p.offAxisDampingZetaMin >= 1.0)
             }
         }
+    }
+
+    @Test
+    fun leakyBiasConvergesAndBounded() {
+        var bias = Vector3d()
+        val dt = 1.0 / 20.0
+        val maxMag = 0.5
+        repeat(160) {
+            bias = PhysBearingServoMath.stepLeakyVectorBias(
+                current = bias,
+                error = Vector3d(1.0, 0.0, 0.0),
+                dtSec = dt,
+                ki = 2.0,
+                leakPerSec = 0.8,
+                maxMagnitude = maxMag,
+                freezeIntegrate = false
+            )
+        }
+        assertTrue(bias.length() <= maxMag + 1.0e-9)
+        assertTrue(bias.x > 0.0)
+        repeat(220) {
+            bias = PhysBearingServoMath.stepLeakyVectorBias(
+                current = bias,
+                error = Vector3d(),
+                dtSec = dt,
+                ki = 2.0,
+                leakPerSec = 0.8,
+                maxMagnitude = maxMag,
+                freezeIntegrate = false
+            )
+        }
+        assertTrue(bias.length() < 1.0e-3)
+    }
+
+    @Test
+    fun leakyBiasFreezeOnSaturationPreventsWindup() {
+        var bias = Vector3d(0.35, 0.0, 0.0)
+        val dt = 1.0 / 20.0
+        repeat(120) {
+            bias = PhysBearingServoMath.stepLeakyVectorBias(
+                current = bias,
+                error = Vector3d(8.0, 0.0, 0.0),
+                dtSec = dt,
+                ki = 3.0,
+                leakPerSec = 0.9,
+                maxMagnitude = 0.8,
+                freezeIntegrate = true
+            )
+        }
+        assertTrue(bias.length() < 0.35)
+    }
+
+    @Test
+    fun restEarlyReturnRequiresBiasNearZero() {
+        var state = PhysBearingServoMath.HysteresisLatchState(active = false, ticks = 0)
+        repeat(10) {
+            state = PhysBearingServoMath.allowRestEarlyReturn(
+                previouslyAllowed = state.active,
+                previousTicks = state.ticks,
+                seatRestBand = true,
+                tiltRestBand = true,
+                seatMicroBand = true,
+                tiltMicroBand = true,
+                seatBiasMagnitude = 0.25,
+                tiltBiasMagnitude = 0.25,
+                seatBiasZeroBand = 0.1,
+                tiltBiasZeroBand = 0.1,
+                enterTicksRequired = 4
+            )
+        }
+        assertFalse(state.active)
+
+        repeat(4) {
+            state = PhysBearingServoMath.allowRestEarlyReturn(
+                previouslyAllowed = state.active,
+                previousTicks = state.ticks,
+                seatRestBand = true,
+                tiltRestBand = true,
+                seatMicroBand = true,
+                tiltMicroBand = true,
+                seatBiasMagnitude = 0.02,
+                tiltBiasMagnitude = 0.03,
+                seatBiasZeroBand = 0.1,
+                tiltBiasZeroBand = 0.1,
+                enterTicksRequired = 4
+            )
+        }
+        assertTrue(state.active)
+
+        state = PhysBearingServoMath.allowRestEarlyReturn(
+            previouslyAllowed = state.active,
+            previousTicks = state.ticks,
+            seatRestBand = true,
+            tiltRestBand = true,
+            seatMicroBand = true,
+            tiltMicroBand = true,
+            seatBiasMagnitude = 0.25,
+            tiltBiasMagnitude = 0.03,
+            seatBiasZeroBand = 0.1,
+            tiltBiasZeroBand = 0.1,
+            enterTicksRequired = 4
+        )
+        assertFalse(state.active)
+    }
+
+    @Test
+    fun holdSettleDampingMonotonicWithStrength() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+        assertTrue(low.holdPostBrakeSettleTicks <= mid.holdPostBrakeSettleTicks)
+        assertTrue(mid.holdPostBrakeSettleTicks <= high.holdPostBrakeSettleTicks)
+        assertTrue(low.holdPostBrakeKdBoost <= mid.holdPostBrakeKdBoost)
+        assertTrue(mid.holdPostBrakeKdBoost <= high.holdPostBrakeKdBoost)
+    }
+
+    @Test
+    fun strengthMonotonicBiasAuthority() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(low.holdSeatBiasKi <= mid.holdSeatBiasKi && mid.holdSeatBiasKi <= high.holdSeatBiasKi)
+        assertTrue(low.holdSeatBiasMaxAccel <= mid.holdSeatBiasMaxAccel && mid.holdSeatBiasMaxAccel <= high.holdSeatBiasMaxAccel)
+        assertTrue(low.holdTiltBiasKi <= mid.holdTiltBiasKi && mid.holdTiltBiasKi <= high.holdTiltBiasKi)
+        assertTrue(low.holdTiltBiasMaxAlpha <= mid.holdTiltBiasMaxAlpha && mid.holdTiltBiasMaxAlpha <= high.holdTiltBiasMaxAlpha)
+        assertTrue(low.holdSeatBiasLeak <= mid.holdSeatBiasLeak && mid.holdSeatBiasLeak <= high.holdSeatBiasLeak)
+        assertTrue(low.holdTiltBiasLeak <= mid.holdTiltBiasLeak && mid.holdTiltBiasLeak <= high.holdTiltBiasLeak)
+        assertTrue(low.holdRestBiasZeroBandScale >= mid.holdRestBiasZeroBandScale)
+        assertTrue(mid.holdRestBiasZeroBandScale >= high.holdRestBiasZeroBandScale)
+    }
+
+    @Test
+    fun allNewParamsFiniteBounded() {
+        for (strength in listOf(0.0, 0.25, 0.5, 0.75, 1.0)) {
+            val p = PhysBearingServoMath.mapFollowStrength(strength01 = strength, sliderScale = 1.0)
+            assertTrue(p.holdSeatBiasKi.isFinite() && p.holdSeatBiasKi >= 0.0)
+            assertTrue(p.holdSeatBiasLeak.isFinite() && p.holdSeatBiasLeak > 0.0)
+            assertTrue(p.holdSeatBiasMaxAccel.isFinite() && p.holdSeatBiasMaxAccel >= 0.0)
+            assertTrue(p.holdTiltBiasKi.isFinite() && p.holdTiltBiasKi >= 0.0)
+            assertTrue(p.holdTiltBiasLeak.isFinite() && p.holdTiltBiasLeak > 0.0)
+            assertTrue(p.holdTiltBiasMaxAlpha.isFinite() && p.holdTiltBiasMaxAlpha >= 0.0)
+            assertTrue(p.holdPostBrakeSettleTicks >= 1)
+            assertTrue(p.holdPostBrakeKdBoost.isFinite() && p.holdPostBrakeKdBoost >= 1.0)
+            assertTrue(p.holdRestBiasZeroBandScale.isFinite() && p.holdRestBiasZeroBandScale in 0.0..1.0)
+        }
+    }
+
+    @Test
+    fun heavyLeverBlendMonotonic() {
+        val start = 1.5
+        val end = 8.0
+        val b0 = PhysBearingServoMath.heavyLeverBlend(0.0, start, end)
+        val b1 = PhysBearingServoMath.heavyLeverBlend(1.5, start, end)
+        val b2 = PhysBearingServoMath.heavyLeverBlend(3.0, start, end)
+        val b3 = PhysBearingServoMath.heavyLeverBlend(8.0, start, end)
+        val b4 = PhysBearingServoMath.heavyLeverBlend(20.0, start, end)
+        assertEquals(0.0, b0, 1.0e-12)
+        assertEquals(0.0, b1, 1.0e-12)
+        assertTrue(b0 <= b1 && b1 <= b2 && b2 <= b3 && b3 <= b4)
+        assertEquals(1.0, b3, 1.0e-12)
+        assertEquals(1.0, b4, 1.0e-12)
     }
 
     @Test

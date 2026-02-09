@@ -6,6 +6,7 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.sign
 import kotlin.math.sqrt
+import org.joml.Vector3d
 
 internal object PhysBearingServoMath {
     enum class FollowPhase {
@@ -104,6 +105,15 @@ internal object PhysBearingServoMath {
         val holdWorldTiltAlphaCapScale: Double,
         val holdWorldTiltAlphaEqCapScale: Double,
         val holdRestTiltStiffnessFloor: Double,
+        val holdSeatBiasKi: Double,
+        val holdSeatBiasLeak: Double,
+        val holdSeatBiasMaxAccel: Double,
+        val holdTiltBiasKi: Double,
+        val holdTiltBiasLeak: Double,
+        val holdTiltBiasMaxAlpha: Double,
+        val holdPostBrakeSettleTicks: Int,
+        val holdPostBrakeKdBoost: Double,
+        val holdRestBiasZeroBandScale: Double,
         val verticalHoldSeatKpScale: Double,
         val verticalHoldSeatKdScale: Double,
         val verticalHoldTiltKpScale: Double,
@@ -165,6 +175,26 @@ internal object PhysBearingServoMath {
         val holdRestTiltStiffnessFloor =
             lerpClamped(FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MIN, FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MAX, t)
                 .coerceIn(0.0, 1.0)
+        val holdSeatBiasKi = lerpClamped(FOLLOW_HOLD_SEAT_BIAS_KI_MIN, FOLLOW_HOLD_SEAT_BIAS_KI_MAX, t).coerceAtLeast(0.0)
+        val holdSeatBiasLeak =
+            lerpClamped(FOLLOW_HOLD_SEAT_BIAS_LEAK_MIN, FOLLOW_HOLD_SEAT_BIAS_LEAK_MAX, t).coerceAtLeast(0.0)
+        val holdSeatBiasMaxAccel =
+            lerpClamped(FOLLOW_HOLD_SEAT_BIAS_MAX_ACCEL_MIN, FOLLOW_HOLD_SEAT_BIAS_MAX_ACCEL_MAX, t).coerceAtLeast(0.0)
+        val holdTiltBiasKi = lerpClamped(FOLLOW_HOLD_TILT_BIAS_KI_MIN, FOLLOW_HOLD_TILT_BIAS_KI_MAX, t).coerceAtLeast(0.0)
+        val holdTiltBiasLeak =
+            lerpClamped(FOLLOW_HOLD_TILT_BIAS_LEAK_MIN, FOLLOW_HOLD_TILT_BIAS_LEAK_MAX, t).coerceAtLeast(0.0)
+        val holdTiltBiasMaxAlpha =
+            lerpClamped(FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MIN, FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MAX, t).coerceAtLeast(0.0)
+        val holdPostBrakeSettleTicks =
+            lerpClamped(FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MIN, FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MAX, t)
+                .coerceAtLeast(0.0)
+                .toInt()
+                .coerceAtLeast(1)
+        val holdPostBrakeKdBoost =
+            lerpClamped(FOLLOW_HOLD_POST_BRAKE_KD_BOOST_MIN, FOLLOW_HOLD_POST_BRAKE_KD_BOOST_MAX, t).coerceAtLeast(1.0)
+        val holdRestBiasZeroBandScale =
+            lerpClamped(FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MIN, FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MAX, t)
+                .coerceAtLeast(0.01)
         val verticalHoldSeatKpScale =
             lerpClamped(FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MAX, t)
                 .coerceAtLeast(0.0)
@@ -223,6 +253,15 @@ internal object PhysBearingServoMath {
             holdWorldTiltAlphaCapScale = holdWorldTiltAlphaCapScale,
             holdWorldTiltAlphaEqCapScale = holdWorldTiltAlphaEqCapScale,
             holdRestTiltStiffnessFloor = holdRestTiltStiffnessFloor,
+            holdSeatBiasKi = holdSeatBiasKi,
+            holdSeatBiasLeak = holdSeatBiasLeak,
+            holdSeatBiasMaxAccel = holdSeatBiasMaxAccel,
+            holdTiltBiasKi = holdTiltBiasKi,
+            holdTiltBiasLeak = holdTiltBiasLeak,
+            holdTiltBiasMaxAlpha = holdTiltBiasMaxAlpha,
+            holdPostBrakeSettleTicks = holdPostBrakeSettleTicks,
+            holdPostBrakeKdBoost = holdPostBrakeKdBoost,
+            holdRestBiasZeroBandScale = holdRestBiasZeroBandScale,
             verticalHoldSeatKpScale = verticalHoldSeatKpScale,
             verticalHoldSeatKdScale = verticalHoldSeatKdScale,
             verticalHoldTiltKpScale = verticalHoldTiltKpScale,
@@ -249,6 +288,11 @@ internal object PhysBearingServoMath {
     fun verticalAxisBlend(absAxisY: Double, start: Double, end: Double): Double {
         if (!absAxisY.isFinite() || !start.isFinite() || !end.isFinite()) return 0.0
         return smoothStep(start, end, absAxisY.coerceIn(0.0, 1.0))
+    }
+
+    fun heavyLeverBlend(leverArmMeters: Double, startMeters: Double, endMeters: Double): Double {
+        if (!leverArmMeters.isFinite() || !startMeters.isFinite() || !endMeters.isFinite()) return 0.0
+        return smoothStep(startMeters, endMeters, leverArmMeters.coerceAtLeast(0.0))
     }
 
     fun computeAxisHoldProfile(absAxisY: Double, strength01: Double): AxisHoldProfile {
@@ -566,6 +610,89 @@ internal object PhysBearingServoMath {
         return (base + rigidBoost).coerceAtLeast(1.0)
     }
 
+    fun stepLeakyVectorBias(
+        current: Vector3d,
+        error: Vector3d,
+        dtSec: Double,
+        ki: Double,
+        leakPerSec: Double,
+        maxMagnitude: Double,
+        freezeIntegrate: Boolean
+    ): Vector3d {
+        if (!dtSec.isFinite() || dtSec <= 0.0 || !ki.isFinite() || !leakPerSec.isFinite() || !maxMagnitude.isFinite()) {
+            return Vector3d()
+        }
+
+        val next = if (current.isFiniteVec()) current.get(Vector3d()) else Vector3d()
+        val safeError = if (error.isFiniteVec()) error else Vector3d()
+        val safeLeak = leakPerSec.coerceAtLeast(0.0)
+        val decay = exp((-safeLeak * dtSec).coerceAtMost(0.0)).coerceIn(0.0, 1.0)
+        next.mul(decay)
+
+        if (!freezeIntegrate) {
+            val integrateGain = ki.coerceAtLeast(0.0) * dtSec
+            if (integrateGain > 0.0) {
+                next.fma(integrateGain, safeError)
+            }
+        }
+
+        val cap = maxMagnitude.coerceAtLeast(0.0)
+        if (cap <= 0.0) return Vector3d()
+
+        val len = next.length()
+        if (!len.isFinite()) return Vector3d()
+        if (len > cap && len > 1.0e-9) next.mul(cap / len)
+        return if (next.isFiniteVec()) next else Vector3d()
+    }
+
+    fun allowRestEarlyReturn(
+        previouslyAllowed: Boolean,
+        previousTicks: Int,
+        seatRestBand: Boolean,
+        tiltRestBand: Boolean,
+        seatMicroBand: Boolean,
+        tiltMicroBand: Boolean,
+        seatBiasMagnitude: Double,
+        tiltBiasMagnitude: Double,
+        seatBiasZeroBand: Double,
+        tiltBiasZeroBand: Double,
+        enterTicksRequired: Int
+    ): HysteresisLatchState {
+        if (
+            !seatBiasMagnitude.isFinite() ||
+            !tiltBiasMagnitude.isFinite() ||
+            !seatBiasZeroBand.isFinite() ||
+            !tiltBiasZeroBand.isFinite()
+        ) {
+            return HysteresisLatchState(active = false, ticks = 0)
+        }
+
+        val seatBand = seatBiasZeroBand.coerceAtLeast(1.0e-9)
+        val tiltBand = tiltBiasZeroBand.coerceAtLeast(1.0e-9)
+        val enter =
+            seatRestBand &&
+                tiltRestBand &&
+                seatMicroBand &&
+                tiltMicroBand &&
+                seatBiasMagnitude <= seatBand &&
+                tiltBiasMagnitude <= tiltBand
+        val exit =
+            !seatRestBand ||
+                !tiltRestBand ||
+                !seatMicroBand ||
+                !tiltMicroBand ||
+                seatBiasMagnitude >= seatBand * 1.8 ||
+                tiltBiasMagnitude >= tiltBand * 1.8
+        return stepHysteresisLatch(
+            previouslyActive = previouslyAllowed,
+            previousTicks = previousTicks,
+            eligible = true,
+            enterCondition = enter,
+            exitCondition = exit,
+            enterTicksRequired = enterTicksRequired.coerceAtLeast(1)
+        )
+    }
+
     fun stepFollowPhase(
         trackActive: Boolean,
         omegaAbsRadSec: Double,
@@ -662,6 +789,8 @@ internal object PhysBearingServoMath {
         return t * t * (3.0 - 2.0 * t)
     }
 
+    private fun Vector3d.isFiniteVec(): Boolean = x.isFinite() && y.isFinite() && z.isFinite()
+
     private const val FOLLOW_STOP_TIME_MIN_SEC = 0.08
     private const val FOLLOW_STOP_TIME_MAX_SEC = 0.60
     private const val FOLLOW_STOP_SETTLE_RATIO = 100.0
@@ -721,6 +850,24 @@ internal object PhysBearingServoMath {
     private const val FOLLOW_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MAX = 1.38
     private const val FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MIN = 0.32
     private const val FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MAX = 0.64
+    private const val FOLLOW_HOLD_SEAT_BIAS_KI_MIN = 0.20
+    private const val FOLLOW_HOLD_SEAT_BIAS_KI_MAX = 2.10
+    private const val FOLLOW_HOLD_SEAT_BIAS_LEAK_MIN = 0.70
+    private const val FOLLOW_HOLD_SEAT_BIAS_LEAK_MAX = 2.40
+    private const val FOLLOW_HOLD_SEAT_BIAS_MAX_ACCEL_MIN = 0.40
+    private const val FOLLOW_HOLD_SEAT_BIAS_MAX_ACCEL_MAX = 6.00
+    private const val FOLLOW_HOLD_TILT_BIAS_KI_MIN = 0.18
+    private const val FOLLOW_HOLD_TILT_BIAS_KI_MAX = 1.90
+    private const val FOLLOW_HOLD_TILT_BIAS_LEAK_MIN = 0.65
+    private const val FOLLOW_HOLD_TILT_BIAS_LEAK_MAX = 2.20
+    private const val FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MIN = 0.50
+    private const val FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MAX = 24.0
+    private const val FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MIN = 4.0
+    private const val FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MAX = 14.0
+    private const val FOLLOW_HOLD_POST_BRAKE_KD_BOOST_MIN = 1.20
+    private const val FOLLOW_HOLD_POST_BRAKE_KD_BOOST_MAX = 2.20
+    private const val FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MIN = 1.00
+    private const val FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MAX = 0.35
     private const val FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MIN = 1.00
     private const val FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MAX = 0.82
     private const val FOLLOW_VERTICAL_HOLD_SEAT_KD_SCALE_MIN = 1.10
