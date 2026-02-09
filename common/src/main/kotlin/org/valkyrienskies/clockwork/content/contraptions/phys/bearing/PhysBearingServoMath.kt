@@ -38,6 +38,42 @@ internal object PhysBearingServoMath {
         val graceTicks: Int
     )
 
+    data class AxisHoldProfile(
+        val verticalBlend: Double,
+        val horizontalBlend: Double,
+        val seatKpScale: Double,
+        val seatKdScale: Double,
+        val tiltKpScale: Double,
+        val tiltKdScale: Double,
+        val restGateScale: Double,
+        val extraOffAxisDamping: Double,
+        val worldSeatAccelCapScale: Double,
+        val worldTiltAlphaCapScale: Double,
+        val worldTiltAlphaEqCapScale: Double,
+        val microKpFloor: Double,
+        val microKdBoost: Double,
+        val offAxisDampingZetaMin: Double
+    ) {
+        companion object {
+            val IDENTITY = AxisHoldProfile(
+                verticalBlend = 0.0,
+                horizontalBlend = 0.0,
+                seatKpScale = 1.0,
+                seatKdScale = 1.0,
+                tiltKpScale = 1.0,
+                tiltKdScale = 1.0,
+                restGateScale = 1.0,
+                extraOffAxisDamping = 0.0,
+                worldSeatAccelCapScale = 1.0,
+                worldTiltAlphaCapScale = 1.0,
+                worldTiltAlphaEqCapScale = 1.0,
+                microKpFloor = 1.0,
+                microKdBoost = 1.0,
+                offAxisDampingZetaMin = 1.0
+            )
+        }
+    }
+
     data class FollowStrengthParams(
         val stopTimeSec: Double,
         val brakeRate: Double,
@@ -68,6 +104,15 @@ internal object PhysBearingServoMath {
         val holdWorldTiltAlphaCapScale: Double,
         val holdWorldTiltAlphaEqCapScale: Double,
         val holdRestTiltStiffnessFloor: Double,
+        val verticalHoldSeatKpScale: Double,
+        val verticalHoldSeatKdScale: Double,
+        val verticalHoldTiltKpScale: Double,
+        val verticalHoldTiltKdScale: Double,
+        val verticalHoldExtraOffAxisDamping: Double,
+        val verticalHoldRestGateScale: Double,
+        val verticalHoldWorldSeatAccelCapScale: Double,
+        val verticalHoldWorldTiltAlphaCapScale: Double,
+        val verticalHoldWorldTiltAlphaEqCapScale: Double,
     )
 
     fun mapFollowStrength(strength01: Double, sliderScale: Double): FollowStrengthParams {
@@ -120,6 +165,33 @@ internal object PhysBearingServoMath {
         val holdRestTiltStiffnessFloor =
             lerpClamped(FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MIN, FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MAX, t)
                 .coerceIn(0.0, 1.0)
+        val verticalHoldSeatKpScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MAX, t)
+                .coerceAtLeast(0.0)
+        val verticalHoldSeatKdScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_SEAT_KD_SCALE_MIN, FOLLOW_VERTICAL_HOLD_SEAT_KD_SCALE_MAX, t)
+                .coerceAtLeast(0.0)
+        val verticalHoldTiltKpScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_TILT_KP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_TILT_KP_SCALE_MAX, t)
+                .coerceAtLeast(0.0)
+        val verticalHoldTiltKdScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_TILT_KD_SCALE_MIN, FOLLOW_VERTICAL_HOLD_TILT_KD_SCALE_MAX, t)
+                .coerceAtLeast(0.0)
+        val verticalHoldExtraOffAxisDamping =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_EXTRA_OFFAXIS_DAMPING_MIN, FOLLOW_VERTICAL_HOLD_EXTRA_OFFAXIS_DAMPING_MAX, t)
+                .coerceAtLeast(0.0)
+        val verticalHoldRestGateScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_REST_GATE_SCALE_MIN, FOLLOW_VERTICAL_HOLD_REST_GATE_SCALE_MAX, t)
+                .coerceAtLeast(0.0)
+        val verticalHoldWorldSeatAccelCapScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_WORLD_SEAT_ACCEL_CAP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_WORLD_SEAT_ACCEL_CAP_SCALE_MAX, t)
+                .coerceAtLeast(0.0)
+        val verticalHoldWorldTiltAlphaCapScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MAX, t)
+                .coerceAtLeast(0.0)
+        val verticalHoldWorldTiltAlphaEqCapScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MAX, t)
+                .coerceAtLeast(0.0)
 
         return FollowStrengthParams(
             stopTimeSec = stopTimeSec,
@@ -150,7 +222,16 @@ internal object PhysBearingServoMath {
             holdWorldTiltKdBoost = holdWorldTiltKdBoost,
             holdWorldTiltAlphaCapScale = holdWorldTiltAlphaCapScale,
             holdWorldTiltAlphaEqCapScale = holdWorldTiltAlphaEqCapScale,
-            holdRestTiltStiffnessFloor = holdRestTiltStiffnessFloor
+            holdRestTiltStiffnessFloor = holdRestTiltStiffnessFloor,
+            verticalHoldSeatKpScale = verticalHoldSeatKpScale,
+            verticalHoldSeatKdScale = verticalHoldSeatKdScale,
+            verticalHoldTiltKpScale = verticalHoldTiltKpScale,
+            verticalHoldTiltKdScale = verticalHoldTiltKdScale,
+            verticalHoldExtraOffAxisDamping = verticalHoldExtraOffAxisDamping,
+            verticalHoldRestGateScale = verticalHoldRestGateScale,
+            verticalHoldWorldSeatAccelCapScale = verticalHoldWorldSeatAccelCapScale,
+            verticalHoldWorldTiltAlphaCapScale = verticalHoldWorldTiltAlphaCapScale,
+            verticalHoldWorldTiltAlphaEqCapScale = verticalHoldWorldTiltAlphaEqCapScale
         )
     }
 
@@ -163,6 +244,94 @@ internal object PhysBearingServoMath {
     fun isFollowCommandActive(commandAbsOmegaRadSec: Double, epsilonRadSec: Double): Boolean {
         if (!commandAbsOmegaRadSec.isFinite() || !epsilonRadSec.isFinite()) return false
         return commandAbsOmegaRadSec >= epsilonRadSec.coerceAtLeast(0.0)
+    }
+
+    fun verticalAxisBlend(absAxisY: Double, start: Double, end: Double): Double {
+        if (!absAxisY.isFinite() || !start.isFinite() || !end.isFinite()) return 0.0
+        return smoothStep(start, end, absAxisY.coerceIn(0.0, 1.0))
+    }
+
+    fun computeAxisHoldProfile(absAxisY: Double, strength01: Double): AxisHoldProfile {
+        if (!absAxisY.isFinite() || !strength01.isFinite()) return AxisHoldProfile.IDENTITY
+
+        val t = strength01.coerceIn(0.0, 1.0)
+        val y = absAxisY.coerceIn(0.0, 1.0)
+        val verticalBlend = verticalAxisBlend(y, FOLLOW_AXIS_BLEND_START, FOLLOW_AXIS_BLEND_END)
+        val horizontalBlend = verticalAxisBlend(1.0 - y, FOLLOW_AXIS_BLEND_START, FOLLOW_AXIS_BLEND_END)
+
+        val verticalSeatKpScale = lerpClamped(FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MAX, t)
+        val verticalSeatKdScale = lerpClamped(FOLLOW_VERTICAL_HOLD_SEAT_KD_SCALE_MIN, FOLLOW_VERTICAL_HOLD_SEAT_KD_SCALE_MAX, t)
+        val verticalTiltKpScale = lerpClamped(FOLLOW_VERTICAL_HOLD_TILT_KP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_TILT_KP_SCALE_MAX, t)
+        val verticalTiltKdScale = lerpClamped(FOLLOW_VERTICAL_HOLD_TILT_KD_SCALE_MIN, FOLLOW_VERTICAL_HOLD_TILT_KD_SCALE_MAX, t)
+        val verticalRestGateScale = lerpClamped(FOLLOW_VERTICAL_HOLD_REST_GATE_SCALE_MIN, FOLLOW_VERTICAL_HOLD_REST_GATE_SCALE_MAX, t)
+        val verticalExtraOffAxisDamping =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_EXTRA_OFFAXIS_DAMPING_MIN, FOLLOW_VERTICAL_HOLD_EXTRA_OFFAXIS_DAMPING_MAX, t)
+        val verticalWorldSeatAccelCapScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_WORLD_SEAT_ACCEL_CAP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_WORLD_SEAT_ACCEL_CAP_SCALE_MAX, t)
+        val verticalWorldTiltAlphaCapScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MAX, t)
+        val verticalWorldTiltAlphaEqCapScale =
+            lerpClamped(FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MAX, t)
+
+        val horizontalSeatKpScale =
+            lerpClamped(FOLLOW_HORIZONTAL_HOLD_SEAT_KP_SCALE_MIN, FOLLOW_HORIZONTAL_HOLD_SEAT_KP_SCALE_MAX, t)
+        val horizontalSeatKdScale =
+            lerpClamped(FOLLOW_HORIZONTAL_HOLD_SEAT_KD_SCALE_MIN, FOLLOW_HORIZONTAL_HOLD_SEAT_KD_SCALE_MAX, t)
+        val horizontalTiltKpScale =
+            lerpClamped(FOLLOW_HORIZONTAL_HOLD_TILT_KP_SCALE_MIN, FOLLOW_HORIZONTAL_HOLD_TILT_KP_SCALE_MAX, t)
+        val horizontalTiltKdScale =
+            lerpClamped(FOLLOW_HORIZONTAL_HOLD_TILT_KD_SCALE_MIN, FOLLOW_HORIZONTAL_HOLD_TILT_KD_SCALE_MAX, t)
+        val horizontalRestGateScale =
+            lerpClamped(FOLLOW_HORIZONTAL_HOLD_REST_GATE_SCALE_MIN, FOLLOW_HORIZONTAL_HOLD_REST_GATE_SCALE_MAX, t)
+        val horizontalExtraOffAxisDamping =
+            lerpClamped(FOLLOW_HORIZONTAL_HOLD_EXTRA_OFFAXIS_DAMPING_MIN, FOLLOW_HORIZONTAL_HOLD_EXTRA_OFFAXIS_DAMPING_MAX, t)
+
+        val seatKpScale =
+            lerpClamped(1.0, verticalSeatKpScale, verticalBlend) * lerpClamped(1.0, horizontalSeatKpScale, horizontalBlend)
+        val seatKdScale =
+            lerpClamped(1.0, verticalSeatKdScale, verticalBlend) * lerpClamped(1.0, horizontalSeatKdScale, horizontalBlend)
+        val tiltKpScale =
+            lerpClamped(1.0, verticalTiltKpScale, verticalBlend) * lerpClamped(1.0, horizontalTiltKpScale, horizontalBlend)
+        val tiltKdScale =
+            lerpClamped(1.0, verticalTiltKdScale, verticalBlend) * lerpClamped(1.0, horizontalTiltKdScale, horizontalBlend)
+        val restGateScale =
+            (lerpClamped(1.0, verticalRestGateScale, verticalBlend) * lerpClamped(1.0, horizontalRestGateScale, horizontalBlend))
+                .coerceIn(0.05, 1.0)
+        val extraOffAxisDamping =
+            (verticalExtraOffAxisDamping * verticalBlend + horizontalExtraOffAxisDamping * horizontalBlend).coerceAtLeast(0.0)
+
+        val verticalMicroKpFloor = lerpClamped(FOLLOW_VERTICAL_MICRO_KP_FLOOR_MIN, FOLLOW_VERTICAL_MICRO_KP_FLOOR_MAX, t)
+        val horizontalMicroKpFloor = lerpClamped(FOLLOW_HORIZONTAL_MICRO_KP_FLOOR_MIN, FOLLOW_HORIZONTAL_MICRO_KP_FLOOR_MAX, t)
+        val verticalMicroKdBoost = lerpClamped(FOLLOW_VERTICAL_MICRO_KD_BOOST_MIN, FOLLOW_VERTICAL_MICRO_KD_BOOST_MAX, t)
+        val horizontalMicroKdBoost = lerpClamped(FOLLOW_HORIZONTAL_MICRO_KD_BOOST_MIN, FOLLOW_HORIZONTAL_MICRO_KD_BOOST_MAX, t)
+        val microKpFloor =
+            (lerpClamped(1.0, verticalMicroKpFloor, verticalBlend) * lerpClamped(1.0, horizontalMicroKpFloor, horizontalBlend))
+                .coerceIn(0.05, 1.0)
+        val microKdBoost =
+            (lerpClamped(1.0, verticalMicroKdBoost, verticalBlend) * lerpClamped(1.0, horizontalMicroKdBoost, horizontalBlend))
+                .coerceAtLeast(1.0)
+
+        val horizontalZetaMin = lerpClamped(FOLLOW_HORIZONTAL_OFFAXIS_ZETA_MIN_MIN, FOLLOW_HORIZONTAL_OFFAXIS_ZETA_MIN_MAX, t)
+        val verticalZetaMin = lerpClamped(FOLLOW_VERTICAL_OFFAXIS_ZETA_MIN_MIN, FOLLOW_VERTICAL_OFFAXIS_ZETA_MIN_MAX, t)
+        val offAxisDampingZetaMin =
+            lerpClamped(horizontalZetaMin, verticalZetaMin, verticalBlend).coerceAtLeast(1.0)
+
+        return AxisHoldProfile(
+            verticalBlend = verticalBlend,
+            horizontalBlend = horizontalBlend,
+            seatKpScale = seatKpScale.coerceAtLeast(0.0),
+            seatKdScale = seatKdScale.coerceAtLeast(0.0),
+            tiltKpScale = tiltKpScale.coerceAtLeast(0.0),
+            tiltKdScale = tiltKdScale.coerceAtLeast(0.0),
+            restGateScale = restGateScale,
+            extraOffAxisDamping = extraOffAxisDamping,
+            worldSeatAccelCapScale = lerpClamped(1.0, verticalWorldSeatAccelCapScale, verticalBlend).coerceAtLeast(1.0),
+            worldTiltAlphaCapScale = lerpClamped(1.0, verticalWorldTiltAlphaCapScale, verticalBlend).coerceAtLeast(1.0),
+            worldTiltAlphaEqCapScale = lerpClamped(1.0, verticalWorldTiltAlphaEqCapScale, verticalBlend).coerceAtLeast(1.0),
+            microKpFloor = microKpFloor,
+            microKdBoost = microKdBoost,
+            offAxisDampingZetaMin = offAxisDampingZetaMin
+        )
     }
 
     fun boundedStallEpsilonRad(
@@ -294,10 +463,14 @@ internal object PhysBearingServoMath {
         holdKdAlphaMapped: Double,
         holdDampingZetaMin: Double
     ): Double {
-        if (!holdKpAlpha.isFinite() || !holdKdAlphaMapped.isFinite() || !holdDampingZetaMin.isFinite()) return 0.0
-        val kp = max(holdKpAlpha, 1.0e-9)
-        val kdFloor = 2.0 * holdDampingZetaMin.coerceAtLeast(0.0) * sqrt(kp)
-        return max(holdKdAlphaMapped, kdFloor)
+        return kdWithFloor(holdKpAlpha, holdKdAlphaMapped, holdDampingZetaMin)
+    }
+
+    fun kdWithFloor(kp: Double, kdMapped: Double, zetaMin: Double): Double {
+        if (!kp.isFinite() || !kdMapped.isFinite() || !zetaMin.isFinite()) return 0.0
+        val kpSafe = max(kp, 1.0e-9)
+        val kdFloor = 2.0 * zetaMin.coerceAtLeast(0.0) * sqrt(kpSafe)
+        return max(kdMapped, kdFloor)
     }
 
     fun computeHoldAlpha(
@@ -548,6 +721,50 @@ internal object PhysBearingServoMath {
     private const val FOLLOW_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MAX = 1.38
     private const val FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MIN = 0.32
     private const val FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MAX = 0.64
+    private const val FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MIN = 1.00
+    private const val FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MAX = 0.82
+    private const val FOLLOW_VERTICAL_HOLD_SEAT_KD_SCALE_MIN = 1.10
+    private const val FOLLOW_VERTICAL_HOLD_SEAT_KD_SCALE_MAX = 2.20
+    private const val FOLLOW_VERTICAL_HOLD_TILT_KP_SCALE_MIN = 1.00
+    private const val FOLLOW_VERTICAL_HOLD_TILT_KP_SCALE_MAX = 0.78
+    private const val FOLLOW_VERTICAL_HOLD_TILT_KD_SCALE_MIN = 1.15
+    private const val FOLLOW_VERTICAL_HOLD_TILT_KD_SCALE_MAX = 2.35
+    private const val FOLLOW_VERTICAL_HOLD_EXTRA_OFFAXIS_DAMPING_MIN = 0.20
+    private const val FOLLOW_VERTICAL_HOLD_EXTRA_OFFAXIS_DAMPING_MAX = 2.00
+    private const val FOLLOW_VERTICAL_HOLD_REST_GATE_SCALE_MIN = 1.00
+    private const val FOLLOW_VERTICAL_HOLD_REST_GATE_SCALE_MAX = 0.30
+    private const val FOLLOW_VERTICAL_HOLD_WORLD_SEAT_ACCEL_CAP_SCALE_MIN = 1.00
+    private const val FOLLOW_VERTICAL_HOLD_WORLD_SEAT_ACCEL_CAP_SCALE_MAX = 2.10
+    private const val FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MIN = 1.00
+    private const val FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_CAP_SCALE_MAX = 2.20
+    private const val FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MIN = 1.00
+    private const val FOLLOW_VERTICAL_HOLD_WORLD_TILT_ALPHA_EQ_CAP_SCALE_MAX = 2.00
+    private const val FOLLOW_HORIZONTAL_HOLD_SEAT_KP_SCALE_MIN = 1.00
+    private const val FOLLOW_HORIZONTAL_HOLD_SEAT_KP_SCALE_MAX = 0.92
+    private const val FOLLOW_HORIZONTAL_HOLD_SEAT_KD_SCALE_MIN = 1.00
+    private const val FOLLOW_HORIZONTAL_HOLD_SEAT_KD_SCALE_MAX = 1.45
+    private const val FOLLOW_HORIZONTAL_HOLD_TILT_KP_SCALE_MIN = 1.00
+    private const val FOLLOW_HORIZONTAL_HOLD_TILT_KP_SCALE_MAX = 0.90
+    private const val FOLLOW_HORIZONTAL_HOLD_TILT_KD_SCALE_MIN = 1.00
+    private const val FOLLOW_HORIZONTAL_HOLD_TILT_KD_SCALE_MAX = 1.55
+    private const val FOLLOW_HORIZONTAL_HOLD_REST_GATE_SCALE_MIN = 1.00
+    private const val FOLLOW_HORIZONTAL_HOLD_REST_GATE_SCALE_MAX = 0.65
+    private const val FOLLOW_HORIZONTAL_HOLD_EXTRA_OFFAXIS_DAMPING_MIN = 0.00
+    private const val FOLLOW_HORIZONTAL_HOLD_EXTRA_OFFAXIS_DAMPING_MAX = 0.70
+    private const val FOLLOW_AXIS_BLEND_START = 0.55
+    private const val FOLLOW_AXIS_BLEND_END = 0.90
+    private const val FOLLOW_VERTICAL_MICRO_KP_FLOOR_MIN = 1.00
+    private const val FOLLOW_VERTICAL_MICRO_KP_FLOOR_MAX = 0.45
+    private const val FOLLOW_VERTICAL_MICRO_KD_BOOST_MIN = 1.00
+    private const val FOLLOW_VERTICAL_MICRO_KD_BOOST_MAX = 1.50
+    private const val FOLLOW_HORIZONTAL_MICRO_KP_FLOOR_MIN = 1.00
+    private const val FOLLOW_HORIZONTAL_MICRO_KP_FLOOR_MAX = 0.72
+    private const val FOLLOW_HORIZONTAL_MICRO_KD_BOOST_MIN = 1.00
+    private const val FOLLOW_HORIZONTAL_MICRO_KD_BOOST_MAX = 1.20
+    private const val FOLLOW_HORIZONTAL_OFFAXIS_ZETA_MIN_MIN = 1.10
+    private const val FOLLOW_HORIZONTAL_OFFAXIS_ZETA_MIN_MAX = 1.35
+    private const val FOLLOW_VERTICAL_OFFAXIS_ZETA_MIN_MIN = 1.20
+    private const val FOLLOW_VERTICAL_OFFAXIS_ZETA_MIN_MAX = 1.55
     private const val FOLLOW_HOLD_AUTH_FLOOR_MIN = 0.48
     private const val FOLLOW_HOLD_AUTH_FLOOR_MAX = 0.78
     private const val FOLLOW_HOLD_AUTH_FLOOR_RIGID_BOOST = 0.15

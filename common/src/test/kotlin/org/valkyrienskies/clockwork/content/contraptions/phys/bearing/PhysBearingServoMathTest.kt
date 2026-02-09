@@ -500,6 +500,217 @@ class PhysBearingServoMathTest {
     }
 
     @Test
+    fun verticalAxisBlendMonotonic() {
+        val start = 0.55
+        val end = 0.90
+        val b0 = PhysBearingServoMath.verticalAxisBlend(0.00, start, end)
+        val b1 = PhysBearingServoMath.verticalAxisBlend(0.30, start, end)
+        val b2 = PhysBearingServoMath.verticalAxisBlend(0.55, start, end)
+        val b3 = PhysBearingServoMath.verticalAxisBlend(0.72, start, end)
+        val b4 = PhysBearingServoMath.verticalAxisBlend(0.90, start, end)
+        val b5 = PhysBearingServoMath.verticalAxisBlend(1.00, start, end)
+
+        assertEquals(0.0, b0, 1.0e-12)
+        assertEquals(0.0, b1, 1.0e-12)
+        assertTrue(b0 <= b1 && b1 <= b2 && b2 <= b3 && b3 <= b4 && b4 <= b5)
+        assertEquals(1.0, b4, 1.0e-12)
+        assertEquals(1.0, b5, 1.0e-12)
+    }
+
+    @Test
+    fun verticalHoldProfileStrengthMonotonic() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(
+            low.verticalHoldSeatKdScale <= mid.verticalHoldSeatKdScale &&
+                mid.verticalHoldSeatKdScale <= high.verticalHoldSeatKdScale
+        )
+        assertTrue(
+            low.verticalHoldTiltKdScale <= mid.verticalHoldTiltKdScale &&
+                mid.verticalHoldTiltKdScale <= high.verticalHoldTiltKdScale
+        )
+        assertTrue(
+            low.verticalHoldExtraOffAxisDamping <= mid.verticalHoldExtraOffAxisDamping &&
+                mid.verticalHoldExtraOffAxisDamping <= high.verticalHoldExtraOffAxisDamping
+        )
+        assertTrue(
+            low.verticalHoldSeatKpScale >= mid.verticalHoldSeatKpScale &&
+                mid.verticalHoldSeatKpScale >= high.verticalHoldSeatKpScale
+        )
+        assertTrue(
+            low.verticalHoldTiltKpScale >= mid.verticalHoldTiltKpScale &&
+                mid.verticalHoldTiltKpScale >= high.verticalHoldTiltKpScale
+        )
+    }
+
+    @Test
+    fun verticalRestGateScaleStrengthMonotonic() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(low.verticalHoldRestGateScale >= mid.verticalHoldRestGateScale)
+        assertTrue(mid.verticalHoldRestGateScale >= high.verticalHoldRestGateScale)
+        assertTrue(high.verticalHoldRestGateScale > 0.0)
+    }
+
+    @Test
+    fun verticalWorldCapScalesMonotonic() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(
+            low.verticalHoldWorldSeatAccelCapScale <= mid.verticalHoldWorldSeatAccelCapScale &&
+                mid.verticalHoldWorldSeatAccelCapScale <= high.verticalHoldWorldSeatAccelCapScale
+        )
+        assertTrue(
+            low.verticalHoldWorldTiltAlphaCapScale <= mid.verticalHoldWorldTiltAlphaCapScale &&
+                mid.verticalHoldWorldTiltAlphaCapScale <= high.verticalHoldWorldTiltAlphaCapScale
+        )
+        assertTrue(
+            low.verticalHoldWorldTiltAlphaEqCapScale <= mid.verticalHoldWorldTiltAlphaEqCapScale &&
+                mid.verticalHoldWorldTiltAlphaEqCapScale <= high.verticalHoldWorldTiltAlphaEqCapScale
+        )
+    }
+
+    @Test
+    fun horizontalAxisBlendMonotonic() {
+        val b0 = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.00, strength01 = 1.0).horizontalBlend
+        val b1 = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.25, strength01 = 1.0).horizontalBlend
+        val b2 = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.55, strength01 = 1.0).horizontalBlend
+        val b3 = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.80, strength01 = 1.0).horizontalBlend
+        val b4 = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 1.00, strength01 = 1.0).horizontalBlend
+
+        assertEquals(1.0, b0, 1.0e-12)
+        assertEquals(0.0, b4, 1.0e-12)
+        assertTrue(b0 >= b1 && b1 >= b2 && b2 >= b3 && b3 >= b4)
+    }
+
+    @Test
+    fun axisHoldProfileConservativeHorizontal() {
+        val low = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.0, strength01 = 0.0)
+        val high = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.0, strength01 = 1.0)
+
+        assertEquals(0.0, high.verticalBlend, 1.0e-12)
+        assertEquals(1.0, high.horizontalBlend, 1.0e-12)
+        assertEquals(1.00, low.seatKpScale, 1.0e-12)
+        assertEquals(0.92, high.seatKpScale, 1.0e-12)
+        assertEquals(1.00, low.seatKdScale, 1.0e-12)
+        assertEquals(1.45, high.seatKdScale, 1.0e-12)
+        assertEquals(1.00, low.tiltKpScale, 1.0e-12)
+        assertEquals(0.90, high.tiltKpScale, 1.0e-12)
+        assertEquals(1.00, low.tiltKdScale, 1.0e-12)
+        assertEquals(1.55, high.tiltKdScale, 1.0e-12)
+        assertEquals(1.00, low.restGateScale, 1.0e-12)
+        assertEquals(0.65, high.restGateScale, 1.0e-12)
+        assertEquals(0.00, low.extraOffAxisDamping, 1.0e-12)
+        assertEquals(0.70, high.extraOffAxisDamping, 1.0e-12)
+    }
+
+    @Test
+    fun axisHoldProfileVerticalPreserved() {
+        val low = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 1.0, strength01 = 0.0)
+        val high = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 1.0, strength01 = 1.0)
+
+        assertEquals(1.0, high.verticalBlend, 1.0e-12)
+        assertEquals(0.0, high.horizontalBlend, 1.0e-12)
+        assertEquals(1.00, low.seatKpScale, 1.0e-12)
+        assertEquals(0.82, high.seatKpScale, 1.0e-12)
+        assertEquals(1.10, low.seatKdScale, 1.0e-12)
+        assertEquals(2.20, high.seatKdScale, 1.0e-12)
+        assertEquals(1.00, low.tiltKpScale, 1.0e-12)
+        assertEquals(0.78, high.tiltKpScale, 1.0e-12)
+        assertEquals(1.15, low.tiltKdScale, 1.0e-12)
+        assertEquals(2.35, high.tiltKdScale, 1.0e-12)
+        assertEquals(1.00, low.restGateScale, 1.0e-12)
+        assertEquals(0.30, high.restGateScale, 1.0e-12)
+        assertEquals(0.20, low.extraOffAxisDamping, 1.0e-12)
+        assertEquals(2.00, high.extraOffAxisDamping, 1.0e-12)
+        assertEquals(1.00, low.worldSeatAccelCapScale, 1.0e-12)
+        assertEquals(2.10, high.worldSeatAccelCapScale, 1.0e-12)
+        assertEquals(1.00, low.worldTiltAlphaCapScale, 1.0e-12)
+        assertEquals(2.20, high.worldTiltAlphaCapScale, 1.0e-12)
+        assertEquals(1.00, low.worldTiltAlphaEqCapScale, 1.0e-12)
+        assertEquals(2.00, high.worldTiltAlphaEqCapScale, 1.0e-12)
+    }
+
+    @Test
+    fun axisRestGateMonotonicBothAxes() {
+        val horizontalLow = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.0, strength01 = 0.0)
+        val horizontalMid = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.0, strength01 = 0.5)
+        val horizontalHigh = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 0.0, strength01 = 1.0)
+        assertTrue(horizontalLow.restGateScale >= horizontalMid.restGateScale)
+        assertTrue(horizontalMid.restGateScale >= horizontalHigh.restGateScale)
+
+        val verticalLow = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 1.0, strength01 = 0.0)
+        val verticalMid = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 1.0, strength01 = 0.5)
+        val verticalHigh = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = 1.0, strength01 = 1.0)
+        assertTrue(verticalLow.restGateScale >= verticalMid.restGateScale)
+        assertTrue(verticalMid.restGateScale >= verticalHigh.restGateScale)
+    }
+
+    @Test
+    fun axisKdFloorRespectedBothAxes() {
+        for (axis in listOf(0.0, 1.0)) {
+            for (strength in listOf(0.0, 0.5, 1.0)) {
+                val profile = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = axis, strength01 = strength)
+                val kp = 16.0 * profile.tiltKpScale
+                val kdMapped = 0.8 * profile.tiltKdScale
+                val kdEff = PhysBearingServoMath.kdWithFloor(
+                    kp = kp,
+                    kdMapped = kdMapped,
+                    zetaMin = profile.offAxisDampingZetaMin
+                )
+                val kdFloor = 2.0 * profile.offAxisDampingZetaMin * sqrt(max(kp, 1.0e-9))
+                assertTrue(kdEff + 1.0e-9 >= kdFloor)
+            }
+        }
+    }
+
+    @Test
+    fun axisProfileOutputsFiniteAndBounded() {
+        for (axis in listOf(0.0, 0.3, 0.6, 1.0)) {
+            for (strength in listOf(0.0, 0.25, 0.5, 0.75, 1.0)) {
+                val p = PhysBearingServoMath.computeAxisHoldProfile(absAxisY = axis, strength01 = strength)
+                val allFinite = listOf(
+                    p.verticalBlend,
+                    p.horizontalBlend,
+                    p.seatKpScale,
+                    p.seatKdScale,
+                    p.tiltKpScale,
+                    p.tiltKdScale,
+                    p.restGateScale,
+                    p.extraOffAxisDamping,
+                    p.worldSeatAccelCapScale,
+                    p.worldTiltAlphaCapScale,
+                    p.worldTiltAlphaEqCapScale,
+                    p.microKpFloor,
+                    p.microKdBoost,
+                    p.offAxisDampingZetaMin
+                ).all { it.isFinite() }
+                assertTrue(allFinite)
+                assertTrue(p.verticalBlend in 0.0..1.0)
+                assertTrue(p.horizontalBlend in 0.0..1.0)
+                assertTrue(p.seatKpScale > 0.0)
+                assertTrue(p.seatKdScale > 0.0)
+                assertTrue(p.tiltKpScale > 0.0)
+                assertTrue(p.tiltKdScale > 0.0)
+                assertTrue(p.restGateScale in 0.0..1.0)
+                assertTrue(p.extraOffAxisDamping >= 0.0)
+                assertTrue(p.worldSeatAccelCapScale >= 1.0)
+                assertTrue(p.worldTiltAlphaCapScale >= 1.0)
+                assertTrue(p.worldTiltAlphaEqCapScale >= 1.0)
+                assertTrue(p.microKpFloor in 0.0..1.0)
+                assertTrue(p.microKdBoost >= 1.0)
+                assertTrue(p.offAxisDampingZetaMin >= 1.0)
+            }
+        }
+    }
+
+    @Test
     fun sameDirectionAssistGate() {
         assertTrue(PhysBearingServoMath.sameDirectionAssistEnabled(0.2, 4.0))
         assertTrue(PhysBearingServoMath.sameDirectionAssistEnabled(-0.2, -4.0))
