@@ -169,8 +169,18 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     @Volatile private var tickAuthority: Double = 1.0
     @Volatile private var tickChainedDynamic: Boolean = false
     @Volatile private var tickGyroRisk: Boolean = false
+    @Volatile private var tickFollowModeActive: Boolean = false
+    @Volatile private var tickFollowBrakePhase: Boolean = false
     @Volatile private var omegaEmaRadSec: Double = 0.0
     @Volatile private var appInertiaConsistentTicks: Int = 0
+    @Volatile private var followBrakeRateRadSec: Double = 0.0
+    @Volatile private var followBrakeStaticAlphaRadSec2: Double = 0.0
+    @Volatile private var followBrakeMaxAlphaRadSec2: Double = 0.0
+    @Volatile private var followTrackOmegaGain: Double = 0.0
+    @Volatile private var followTrackPosAssistGain: Double = 0.0
+    @Volatile private var followTrackPosAssistOmegaLimit: Double = 0.0
+    @Volatile private var followChainTorqueScale: Double = 1.0
+    @Volatile private var followChainStiffnessScale: Double = 1.0
 
     private var controllerCreationData: PhysBearingData? = null
     private var controllerUpdateData: PhysBearingUpdateData? = null
@@ -269,6 +279,16 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         servoTiltDampingRatio = (SERVO_TILT_DAMPING_RATIO_MIN +
             (SERVO_TILT_DAMPING_RATIO_MAX - SERVO_TILT_DAMPING_RATIO_MIN) * tuneTClamped) * sliderScale
         servoTiltTorqueLimit = lerpLog(SERVO_TILT_TORQUE_MIN, SERVO_TILT_TORQUE_MAX, tuneTClamped) * sliderScale
+
+        val followParams = PhysBearingServoMath.mapFollowStrength(tuneTClamped, sliderScale)
+        followBrakeRateRadSec = followParams.brakeRate
+        followBrakeStaticAlphaRadSec2 = followParams.brakeStaticAlpha
+        followBrakeMaxAlphaRadSec2 = followParams.maxBrakeAlpha
+        followTrackOmegaGain = followParams.trackOmegaGain
+        followTrackPosAssistGain = followParams.trackPosAssistGain
+        followTrackPosAssistOmegaLimit = followParams.trackPosAssistOmegaLimit
+        followChainTorqueScale = followParams.chainTorqueScale
+        followChainStiffnessScale = followParams.chainStiffnessScale
     }
 
     private fun computeJointMaxForceTorque(): VSJointMaxForceTorque {
@@ -463,6 +483,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         tickAuthority = 1.0
         tickChainedDynamic = false
         tickGyroRisk = false
+        tickFollowModeActive = false
+        tickFollowBrakePhase = false
     }
 
     private fun servoStrength01(): Double {
@@ -780,6 +802,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val authority = tickAuthority
         val chainedDynamic = tickChainedDynamic
         val gyroRisk = tickGyroRisk
+        val followMode = tickFollowModeActive
+        val followBrakePhase = tickFollowBrakePhase
 
         val anchor0World = subShip.transform.shipToWorld.transformPosition(joint.pose0.pos, Vector3d())
         val anchor1World = if (mainShip != null) {
@@ -853,8 +877,17 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             chainedDynamic -> lerpClamped(SERVO_SEAT_CHAIN_KD_SCALE, 1.0, chainBlend)
             else -> 1.0
         }
-        val seatKp = seatWn * seatWn * seatKpScale
-        val seatKd = 2.0 * seatDamping * seatWn * seatKdScale
+        var seatKp = seatWn * seatWn * seatKpScale
+        var seatKd = 2.0 * seatDamping * seatWn * seatKdScale
+        if (followMode && chainedDynamic) {
+            val stiffnessScale = followChainStiffnessScale.coerceIn(0.1, 1.0)
+            seatKp *= stiffnessScale
+            seatKd *= (1.0 + (1.0 - stiffnessScale) * FOLLOW_CHAIN_STABILIZER_DAMP_BOOST)
+        }
+        if (followBrakePhase) {
+            seatKp *= FOLLOW_BRAKE_SEAT_KP_SCALE
+            seatKd *= FOLLOW_BRAKE_SEAT_KD_SCALE
+        }
 
         val velSuppression = 1.0 / (1.0 + relVelLen * 2.0)
         val seatAuthority = (authority * velSuppression).coerceIn(AUTH_MIN, 1.0)
@@ -919,6 +952,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val authority = tickAuthority
         val chainedDynamic = tickChainedDynamic
         val gyroRisk = tickGyroRisk
+        val followMode = tickFollowModeActive
+        val followBrakePhase = tickFollowBrakePhase
 
         val swingErrorWorldRaw = computeSwingErrorWorld(subShip, mainShip, axisWorldUnit)
         val swingErrorLen = swingErrorWorldRaw.length()
@@ -958,8 +993,17 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             chainedDynamic -> lerpClamped(SERVO_TILT_CHAIN_KD_SCALE, 1.0, chainBlend)
             else -> 1.0
         }
-        val tiltKp = tiltWn * tiltWn * tiltKpScale
-        val tiltKd = 2.0 * tiltDamping * tiltWn * tiltKdScale
+        var tiltKp = tiltWn * tiltWn * tiltKpScale
+        var tiltKd = 2.0 * tiltDamping * tiltWn * tiltKdScale
+        if (followMode && chainedDynamic) {
+            val stiffnessScale = followChainStiffnessScale.coerceIn(0.1, 1.0)
+            tiltKp *= stiffnessScale
+            tiltKd *= (1.0 + (1.0 - stiffnessScale) * FOLLOW_CHAIN_STABILIZER_DAMP_BOOST)
+        }
+        if (followBrakePhase) {
+            tiltKp *= FOLLOW_BRAKE_TILT_KP_SCALE
+            tiltKd *= FOLLOW_BRAKE_TILT_KD_SCALE
+        }
         val dampOnlyErrorRad = if (chainedDynamic) {
             lerpClamped(SERVO_TILT_CHAIN_DAMP_ONLY_ERROR_RAD, SERVO_TILT_DAMP_ONLY_ERROR_RAD, chainBlend)
         } else {
@@ -970,7 +1014,11 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         } else {
             SERVO_TILT_FULL_STIFFNESS_ERROR_RAD
         }
-        val stiffnessAllowed = !gyroRisk && offAxisOmegaLen < 0.6 && abs(relOmegaWorld.dot(axisWorldUnit)).let { abs(it) } < 8.0
+        val stiffnessAllowed =
+            !followBrakePhase &&
+                !gyroRisk &&
+                offAxisOmegaLen < 0.6 &&
+                abs(relOmegaWorld.dot(axisWorldUnit)).let { abs(it) } < 8.0
         val stiffnessBlend =
             if (stiffnessAllowed) smoothStep(dampOnlyErrorRad, fullStiffnessErrorRad, swingErrorWorld.length())
             else 0.0
@@ -1056,6 +1104,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val revolute = joint as? VSRevoluteJoint ?: return
         val mode = servoMode
         val servoActive = aligning || mode != LockedMode.UNLOCKED
+        val followMode = !aligning && mode == LockedMode.FOLLOW_ANGLE
         if (!servoActive) {
             clearServoFilterState()
             return
@@ -1136,71 +1185,102 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             omegaActualForControl
         }
 
-        // FOLLOW_ANGLE should respond immediately to kinetic input; use a feed-forward target omega and a PD in
-        // acceleration-space. This avoids the "infinite torque" behavior that destabilizes heavy/offset ships.
-        var omegaFfRaw = if (!aligning && mode == LockedMode.FOLLOW_ANGLE && !followAngleStalled) {
-            followOmegaFeedForwardRadSec.coerceIn(-SERVO_MAX_OMEGA, SERVO_MAX_OMEGA)
+        var omegaTarget = 0.0
+        var omegaErr = 0.0
+        var alphaCmdRaw = 0.0
+        var omegaFfRaw = 0.0
+        var followBrakePhase = false
+
+        if (followMode) {
+            val cmdOmegaRaw = if (!followAngleStalled) {
+                followOmegaFeedForwardRadSec.coerceIn(-SERVO_MAX_OMEGA, SERVO_MAX_OMEGA)
+            } else {
+                0.0
+            }
+            val followTrackPhase = !followAngleStalled && abs(cmdOmegaRaw) >= FOLLOW_CMD_ACTIVE_OMEGA_RAD_SEC
+            followBrakePhase = !followTrackPhase
+
+            if (followBrakePhase) {
+                targetAngle = normalizeAngleDeg0To720(Math.toDegrees(currentAngleRad))
+                val brakeAlphaRaw = PhysBearingServoMath.computeFrictionBrakeAlpha(
+                    omegaActual,
+                    followBrakeRateRadSec,
+                    followBrakeStaticAlphaRadSec2,
+                    FOLLOW_BRAKE_STOP_OMEGA_RAD_SEC
+                )
+                var brakeAlpha = PhysBearingServoMath.clampNoReverse(brakeAlphaRaw, omegaActual, SERVO_PHYS_TICK_DT_SEC)
+                val maxBrakeAlpha = followBrakeMaxAlphaRadSec2
+                    .coerceAtLeast(0.0)
+                    .coerceAtMost(SERVO_MAX_ALPHA_HARD)
+                brakeAlpha = brakeAlpha.coerceIn(-maxBrakeAlpha, maxBrakeAlpha)
+                alphaCmdRaw = if (abs(omegaActual) <= FOLLOW_BRAKE_STOP_OMEGA_RAD_SEC) 0.0 else brakeAlpha
+                omegaTarget = 0.0
+                omegaErr = -omegaActual
+            } else {
+                omegaFfRaw = cmdOmegaRaw
+                if (chainedDynamic) {
+                    omegaFfRaw *= followChainTorqueScale.coerceIn(0.0, 1.0)
+                }
+                omegaFfRaw *= authority
+                val posAssistAllowed = PhysBearingServoMath.sameDirectionAssistEnabled(errorForControl, omegaFfRaw)
+                val omegaFromPosition = if (posAssistAllowed) {
+                    (followTrackPosAssistGain * errorForControl).coerceIn(
+                        -followTrackPosAssistOmegaLimit,
+                        followTrackPosAssistOmegaLimit
+                    )
+                } else {
+                    0.0
+                }
+                omegaTarget = (omegaFfRaw + omegaFromPosition).coerceIn(-SERVO_MAX_OMEGA, SERVO_MAX_OMEGA)
+                omegaErr = omegaTarget - omegaActual
+                alphaCmdRaw = followTrackOmegaGain * omegaErr
+            }
         } else {
-            0.0
+            // Close to hold, fade positional stiffness and let damping dominate.
+            val posGainNow = servoPosGain * authority
+            val omegaGainNow = servoOmegaGain * authority
+            val omegaFromPositionRaw = (posGainNow * errorForControl).coerceIn(-servoPosOmegaLimit, servoPosOmegaLimit)
+            val omegaFromPosition = omegaFromPositionRaw * holdBlend
+            omegaTarget = omegaFromPosition.coerceIn(-SERVO_MAX_OMEGA, SERVO_MAX_OMEGA)
+            omegaErr = omegaTarget - omegaActual
+            alphaCmdRaw = omegaGainNow * omegaErr
+
+            // Prevent tiny setpoint chatter from exciting heavy ships near lock.
+            if (
+                abs(errorForControl) < SERVO_HOLD_ERROR_RAD &&
+                abs(omegaActual) < SERVO_HOLD_OMEGA_RAD_SEC &&
+                abs(omegaTarget) < SERVO_HOLD_OMEGA_RAD_SEC
+            ) {
+                alphaCmdRaw = 0.0
+            }
         }
 
-        // Prevent FF stacking in chains: strongly attenuate if both ships are dynamic.
-        if (chainedDynamic && omegaFfRaw != 0.0) {
-            // chainBlend is computed later currently; compute it here:
-            val chainBlendLocal = chainAuthorityBlend01()
-            val chainFfScale = lerpClamped(0.15, 0.65, chainBlendLocal)
-            omegaFfRaw *= chainFfScale
-        }
-
-        // Always apply authority to FF (stronger than linear to suppress oscillations).
-        omegaFfRaw *= (authority * authority)
-
-        val followFfScale = if (!aligning && mode == LockedMode.FOLLOW_ANGLE && !followAngleStalled) {
-            smoothStep(FOLLOW_FF_FADE_START_ERROR_RAD, FOLLOW_FF_FADE_END_ERROR_RAD, abs(errorForControl))
+        val alphaFilterAlpha = if (followMode && followBrakePhase) {
+            FOLLOW_BRAKE_ALPHA_FILTER_ALPHA
         } else {
-            0.0
+            lerpClamped(SERVO_ALPHA_FILTER_ALPHA_NEAR_HOLD, SERVO_ALPHA_FILTER_ALPHA_ACTIVE, holdBlend)
         }
-        var omegaFf = (omegaFfRaw * followFfScale).coerceIn(-SERVO_MAX_OMEGA, SERVO_MAX_OMEGA)
-        if (
-            followAngleStalled ||
-            (abs(errorForControl) < FOLLOW_FF_ZERO_ERROR_RAD && abs(omegaActual) < FOLLOW_FF_ZERO_OMEGA_RAD_SEC)
-        ) {
-            omegaFf = 0.0
-        }
-
-        // Close to hold, fade positional stiffness and let damping dominate.
-        val posGainNow = servoPosGain * authority
-        val omegaGainNow = servoOmegaGain * authority
-
-        val omegaFromPositionRaw = (posGainNow * errorForControl).coerceIn(-servoPosOmegaLimit, servoPosOmegaLimit)
-        val omegaFromPosition = omegaFromPositionRaw * holdBlend
-        val omegaTarget = (omegaFromPosition + omegaFf).coerceIn(-SERVO_MAX_OMEGA, SERVO_MAX_OMEGA)
-        val omegaErr = omegaTarget - omegaActual
-        var alphaCmdRaw = omegaGainNow * omegaErr
-
-        // Prevent tiny setpoint chatter from exciting heavy ships near lock.
-        if (
-            abs(errorForControl) < SERVO_HOLD_ERROR_RAD &&
-            abs(omegaActual) < SERVO_HOLD_OMEGA_RAD_SEC &&
-            abs(omegaTarget) < SERVO_HOLD_OMEGA_RAD_SEC &&
-            abs(omegaFf) < SERVO_HOLD_OMEGA_RAD_SEC
-        ) {
-            alphaCmdRaw = 0.0
-        }
-
-        val alphaFilterAlpha = lerpClamped(SERVO_ALPHA_FILTER_ALPHA_NEAR_HOLD, SERVO_ALPHA_FILTER_ALPHA_ACTIVE, holdBlend)
         servoAlphaCmdFilteredRadSec2 = lowPass(servoAlphaCmdFilteredRadSec2, alphaCmdRaw, alphaFilterAlpha)
         var alphaCmd = if (servoAlphaCmdFilteredRadSec2.isFinite()) {
             servoAlphaCmdFilteredRadSec2
         } else {
             alphaCmdRaw
         }
+        if (followMode && followBrakePhase) {
+            alphaCmd = PhysBearingServoMath.clampNoReverse(alphaCmd, omegaActual, SERVO_PHYS_TICK_DT_SEC)
+            if (abs(omegaActual) <= FOLLOW_BRAKE_STOP_OMEGA_RAD_SEC) alphaCmd = 0.0
+        }
         val jitter = abs(alphaCmdRaw - alphaCmd).let { if (it.isFinite()) it else 0.0 }
         if (jitter > AUTH_JITTER_SOFT_LIMIT) {
             val jitterFactor = 1.0 / (1.0 + (jitter - AUTH_JITTER_SOFT_LIMIT) / AUTH_JITTER_SOFT_LIMIT)
             authority = max(AUTH_MIN, authority * jitterFactor)
         }
+        if (followMode && chainedDynamic) {
+            authority = max(AUTH_MIN, authority * followChainTorqueScale.coerceIn(0.0, 1.0))
+        }
         tickAuthority = authority
+        tickFollowModeActive = followMode
+        tickFollowBrakePhase = followBrakePhase
 
         // Discrete-time stability clamp: limit per-tick omega step to avoid high-frequency solver excitation.
         val maxOmegaStepPerTick = lerpClamped(
@@ -1215,6 +1295,10 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
         val alphaLimit = min(SERVO_MAX_ALPHA_HARD, alphaLimitByDt.coerceAtLeast(0.0))
         alphaCmd = alphaCmd.coerceIn(-alphaLimit, alphaLimit)
+        if (followMode && followBrakePhase) {
+            alphaCmd = PhysBearingServoMath.clampNoReverse(alphaCmd, omegaActual, SERVO_PHYS_TICK_DT_SEC)
+            if (abs(omegaActual) <= FOLLOW_BRAKE_STOP_OMEGA_RAD_SEC) alphaCmd = 0.0
+        }
         if (!alphaCmd.isFinite()) return
 
         // Ensure the joint isn't treated as free-spin in servo modes. We do NOT rely on the joint motor here because
@@ -1263,8 +1347,14 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             servoPrevAppliedHingeTorqueMag = 0.0
             return
         }
-        val apparentInertiaScale =
+        val apparentInertiaScale = if (followMode) {
+            appInertiaConsistentTicks = 0
+            servoApparentInertiaScale = lowPass(servoApparentInertiaScale, 1.0, SERVO_APPARENT_INERTIA_IDLE_DECAY_ALPHA)
+            servoPrevOmegaActualForApparentInertiaScaleRadSec = omegaActualForControl
+            1.0
+        } else {
             updateApparentInertiaScale(torqueMassMultiplierBase, omegaActualForControl, errorForControl, omegaErr)
+        }
         val torqueMassMultiplier = torqueMassMultiplierBase * apparentInertiaScale
         if (!torqueMassMultiplier.isFinite() || torqueMassMultiplier <= 0.0) {
             servoPrevAppliedHingeTorqueMag = 0.0
@@ -1291,7 +1381,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val commandNearZero =
             abs(omegaTarget) < SERVO_DAMPING_HOLD_CMD_OMEGA_RAD_SEC &&
                 abs(omegaFfRaw) < SERVO_DAMPING_HOLD_CMD_OMEGA_RAD_SEC
-        val holdLikeState = mode == LockedMode.LOCKED || aligning || nearTargetForDamping
+        val holdLikeState = mode == LockedMode.LOCKED || aligning || (!followMode && nearTargetForDamping)
         val applyHingeDamping =
             holdLikeState && commandNearZero && abs(omegaActual) >= SERVO_DAMPING_MIN_ACTIVE_OMEGA_RAD_SEC
 
@@ -1817,6 +1907,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         curAngle = 0f
 
         physServoTickCounter = 0
+        tickFollowModeActive = false
+        tickFollowBrakePhase = false
         clearServoFilterState()
         clearFollowAngleStallState()
     }
@@ -1847,6 +1939,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             lockedHoldAngleRad = if (mode == LockedMode.LOCKED) currentRad else null
         } else if (lastMode == LockedMode.LOCKED && mode != LockedMode.LOCKED) {
             lockedHoldAngleRad = null
+        }
+        if (lastMode != mode || lastAligningState != aligningNow) {
+            clearServoFilterState()
         }
 
         lastSpeed = speedNow
@@ -2236,11 +2331,17 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         private const val SERVO_HINGE_DAMPING_MAX_TORQUE_FRACTION = 0.12
         private const val SERVO_HINGE_DAMPING_MAX_ALPHA_EQUIV = 8.0
 
-        // FOLLOW_ANGLE feed-forward safety: fade and zero FF near target to avoid hunting.
-        private const val FOLLOW_FF_FADE_START_ERROR_RAD = 0.02
-        private const val FOLLOW_FF_FADE_END_ERROR_RAD = 0.18
-        private const val FOLLOW_FF_ZERO_ERROR_RAD = 0.03
-        private const val FOLLOW_FF_ZERO_OMEGA_RAD_SEC = 0.10
+        // FOLLOW_ANGLE control phases:
+        // - TRACK while kinetic command is active.
+        // - BRAKE when command is near zero or stalled.
+        private const val FOLLOW_CMD_ACTIVE_OMEGA_RAD_SEC = 0.18
+        private const val FOLLOW_BRAKE_STOP_OMEGA_RAD_SEC = 0.05
+        private const val FOLLOW_BRAKE_ALPHA_FILTER_ALPHA = 1.0
+        private const val FOLLOW_BRAKE_SEAT_KP_SCALE = 0.25
+        private const val FOLLOW_BRAKE_SEAT_KD_SCALE = 1.35
+        private const val FOLLOW_BRAKE_TILT_KP_SCALE = 0.20
+        private const val FOLLOW_BRAKE_TILT_KD_SCALE = 1.40
+        private const val FOLLOW_CHAIN_STABILIZER_DAMP_BOOST = 0.70
 
         // Off-axis anchor seating (perpendicular to hinge axis) to suppress lateral wobble under heavy load.
         // Shared strength slider maps both seat stiffness and seat force limit.
