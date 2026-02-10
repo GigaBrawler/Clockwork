@@ -32,6 +32,30 @@ internal object PhysBearingServoMath {
         val ticks: Int
     )
 
+    data class HoldSupportMode(
+        val dampingScale: Double,
+        val stiffnessScale: Double,
+        val allowNearZeroDropout: Boolean
+    )
+
+    data class FixedHoldFloorProfile(
+        val seatAuthorityFloor: Double,
+        val tiltAuthorityFloor: Double,
+        val seatKpFloorScale: Double,
+        val tiltStiffnessFloor: Double,
+        val offAxisDampingZetaMin: Double
+    ) {
+        companion object {
+            val IDENTITY = FixedHoldFloorProfile(
+                seatAuthorityFloor = 0.0,
+                tiltAuthorityFloor = 0.0,
+                seatKpFloorScale = 0.0,
+                tiltStiffnessFloor = 0.0,
+                offAxisDampingZetaMin = 1.0
+            )
+        }
+    }
+
     data class FollowStallState(
         val stalled: Boolean,
         val stallTicks: Int,
@@ -111,9 +135,22 @@ internal object PhysBearingServoMath {
         val holdTiltBiasKi: Double,
         val holdTiltBiasLeak: Double,
         val holdTiltBiasMaxAlpha: Double,
+        val holdBiasFreezeTicks: Int,
+        val holdBiasLeakBoostOnFlip: Double,
+        val holdSeatBiasSlewPerSec: Double,
+        val holdTiltBiasSlewPerSec: Double,
+        val holdAcquireTicks: Int,
+        val holdSpawnSettleTicks: Int,
+        val holdAcquireKpScale: Double,
+        val holdAcquireKdBoost: Double,
         val holdPostBrakeSettleTicks: Int,
         val holdPostBrakeKdBoost: Double,
         val holdRestBiasZeroBandScale: Double,
+        val fixedHoldSeatAuthorityFloor: Double,
+        val fixedHoldTiltAuthorityFloor: Double,
+        val fixedHoldSeatKpFloorScale: Double,
+        val fixedHoldTiltStiffnessFloor: Double,
+        val fixedOffAxisDampingZetaMin: Double,
         val verticalHoldSeatKpScale: Double,
         val verticalHoldSeatKdScale: Double,
         val verticalHoldTiltKpScale: Double,
@@ -185,6 +222,28 @@ internal object PhysBearingServoMath {
             lerpClamped(FOLLOW_HOLD_TILT_BIAS_LEAK_MIN, FOLLOW_HOLD_TILT_BIAS_LEAK_MAX, t).coerceAtLeast(0.0)
         val holdTiltBiasMaxAlpha =
             lerpClamped(FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MIN, FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MAX, t).coerceAtLeast(0.0)
+        val holdBiasFreezeTicks =
+            lerpClamped(FOLLOW_HOLD_BIAS_FREEZE_TICKS_MIN, FOLLOW_HOLD_BIAS_FREEZE_TICKS_MAX, t)
+                .toInt()
+                .coerceAtLeast(0)
+        val holdBiasLeakBoostOnFlip =
+            lerpClamped(FOLLOW_HOLD_BIAS_LEAK_BOOST_ON_FLIP_MIN, FOLLOW_HOLD_BIAS_LEAK_BOOST_ON_FLIP_MAX, t).coerceAtLeast(1.0)
+        val holdSeatBiasSlewPerSec =
+            lerpClamped(FOLLOW_HOLD_SEAT_BIAS_SLEW_PER_SEC_MIN, FOLLOW_HOLD_SEAT_BIAS_SLEW_PER_SEC_MAX, t).coerceAtLeast(0.0)
+        val holdTiltBiasSlewPerSec =
+            lerpClamped(FOLLOW_HOLD_TILT_BIAS_SLEW_PER_SEC_MIN, FOLLOW_HOLD_TILT_BIAS_SLEW_PER_SEC_MAX, t).coerceAtLeast(0.0)
+        val holdAcquireTicks =
+            lerpClamped(FOLLOW_HOLD_ACQUIRE_TICKS_MIN, FOLLOW_HOLD_ACQUIRE_TICKS_MAX, t)
+                .toInt()
+                .coerceAtLeast(0)
+        val holdSpawnSettleTicks =
+            lerpClamped(FOLLOW_HOLD_SPAWN_SETTLE_TICKS_MIN, FOLLOW_HOLD_SPAWN_SETTLE_TICKS_MAX, t)
+                .toInt()
+                .coerceAtLeast(0)
+        val holdAcquireKpScale =
+            lerpClamped(FOLLOW_HOLD_ACQUIRE_KP_SCALE_MIN, FOLLOW_HOLD_ACQUIRE_KP_SCALE_MAX, t).coerceIn(0.0, 1.0)
+        val holdAcquireKdBoost =
+            lerpClamped(FOLLOW_HOLD_ACQUIRE_KD_BOOST_MIN, FOLLOW_HOLD_ACQUIRE_KD_BOOST_MAX, t).coerceAtLeast(1.0)
         val holdPostBrakeSettleTicks =
             lerpClamped(FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MIN, FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MAX, t)
                 .coerceAtLeast(0.0)
@@ -195,6 +254,16 @@ internal object PhysBearingServoMath {
         val holdRestBiasZeroBandScale =
             lerpClamped(FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MIN, FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MAX, t)
                 .coerceAtLeast(0.01)
+        val fixedHoldSeatAuthorityFloor =
+            lerpClamped(FOLLOW_FIXED_HOLD_SEAT_AUTH_FLOOR_MIN, FOLLOW_FIXED_HOLD_SEAT_AUTH_FLOOR_MAX, t).coerceIn(0.0, 1.0)
+        val fixedHoldTiltAuthorityFloor =
+            lerpClamped(FOLLOW_FIXED_HOLD_TILT_AUTH_FLOOR_MIN, FOLLOW_FIXED_HOLD_TILT_AUTH_FLOOR_MAX, t).coerceIn(0.0, 1.0)
+        val fixedHoldSeatKpFloorScale =
+            lerpClamped(FOLLOW_FIXED_HOLD_SEAT_KP_FLOOR_MIN, FOLLOW_FIXED_HOLD_SEAT_KP_FLOOR_MAX, t).coerceIn(0.0, 1.0)
+        val fixedHoldTiltStiffnessFloor =
+            lerpClamped(FOLLOW_FIXED_HOLD_TILT_STIFFNESS_FLOOR_MIN, FOLLOW_FIXED_HOLD_TILT_STIFFNESS_FLOOR_MAX, t).coerceIn(0.0, 1.0)
+        val fixedOffAxisDampingZetaMin =
+            lerpClamped(FOLLOW_FIXED_OFFAXIS_ZETA_MIN, FOLLOW_FIXED_OFFAXIS_ZETA_MAX, t).coerceAtLeast(1.0)
         val verticalHoldSeatKpScale =
             lerpClamped(FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MIN, FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MAX, t)
                 .coerceAtLeast(0.0)
@@ -259,9 +328,22 @@ internal object PhysBearingServoMath {
             holdTiltBiasKi = holdTiltBiasKi,
             holdTiltBiasLeak = holdTiltBiasLeak,
             holdTiltBiasMaxAlpha = holdTiltBiasMaxAlpha,
+            holdBiasFreezeTicks = holdBiasFreezeTicks,
+            holdBiasLeakBoostOnFlip = holdBiasLeakBoostOnFlip,
+            holdSeatBiasSlewPerSec = holdSeatBiasSlewPerSec,
+            holdTiltBiasSlewPerSec = holdTiltBiasSlewPerSec,
+            holdAcquireTicks = holdAcquireTicks,
+            holdSpawnSettleTicks = holdSpawnSettleTicks,
+            holdAcquireKpScale = holdAcquireKpScale,
+            holdAcquireKdBoost = holdAcquireKdBoost,
             holdPostBrakeSettleTicks = holdPostBrakeSettleTicks,
             holdPostBrakeKdBoost = holdPostBrakeKdBoost,
             holdRestBiasZeroBandScale = holdRestBiasZeroBandScale,
+            fixedHoldSeatAuthorityFloor = fixedHoldSeatAuthorityFloor,
+            fixedHoldTiltAuthorityFloor = fixedHoldTiltAuthorityFloor,
+            fixedHoldSeatKpFloorScale = fixedHoldSeatKpFloorScale,
+            fixedHoldTiltStiffnessFloor = fixedHoldTiltStiffnessFloor,
+            fixedOffAxisDampingZetaMin = fixedOffAxisDampingZetaMin,
             verticalHoldSeatKpScale = verticalHoldSeatKpScale,
             verticalHoldSeatKdScale = verticalHoldSeatKdScale,
             verticalHoldTiltKpScale = verticalHoldTiltKpScale,
@@ -610,6 +692,62 @@ internal object PhysBearingServoMath {
         return (base + rigidBoost).coerceAtLeast(1.0)
     }
 
+    fun computeHoldSupportMode(
+        inFollowHold: Boolean,
+        ultraSleep: Boolean,
+        restUltraStable: Boolean,
+        settleActive: Boolean,
+        acquireActive: Boolean,
+        biasActive: Boolean
+    ): HoldSupportMode {
+        if (!inFollowHold) {
+            return HoldSupportMode(
+                dampingScale = 1.0,
+                stiffnessScale = 1.0,
+                allowNearZeroDropout = true
+            )
+        }
+
+        val ultraAttenuate =
+            ultraSleep &&
+                restUltraStable &&
+                !settleActive &&
+                !acquireActive &&
+                !biasActive
+
+        if (ultraAttenuate) {
+            return HoldSupportMode(
+                dampingScale = FOLLOW_HOLD_SUPPORT_ULTRASLEEP_DAMPING_SCALE,
+                stiffnessScale = FOLLOW_HOLD_SUPPORT_ULTRASLEEP_STIFFNESS_SCALE,
+                allowNearZeroDropout = false
+            )
+        }
+
+        return HoldSupportMode(
+            dampingScale = 1.0,
+            stiffnessScale = 1.0,
+            allowNearZeroDropout = false
+        )
+    }
+
+    fun applyFixedHoldFloorProfile(
+        seatAuthorityFloorMapped: Double,
+        tiltAuthorityFloorMapped: Double,
+        seatKpFloorScaleMapped: Double,
+        tiltStiffnessFloorMapped: Double,
+        offAxisDampingZetaMinMapped: Double,
+        rigidBlend01: Double
+    ): FixedHoldFloorProfile {
+        val rigid = rigidBlend01.coerceIn(0.0, 1.0)
+        return FixedHoldFloorProfile(
+            seatAuthorityFloor = (seatAuthorityFloorMapped + FOLLOW_FIXED_HOLD_AUTH_RIGID_BOOST * rigid).coerceIn(0.0, 1.0),
+            tiltAuthorityFloor = (tiltAuthorityFloorMapped + FOLLOW_FIXED_HOLD_AUTH_RIGID_BOOST * rigid).coerceIn(0.0, 1.0),
+            seatKpFloorScale = (seatKpFloorScaleMapped + FOLLOW_FIXED_HOLD_KP_FLOOR_RIGID_BOOST * rigid).coerceIn(0.0, 1.0),
+            tiltStiffnessFloor = (tiltStiffnessFloorMapped + FOLLOW_FIXED_HOLD_STIFFNESS_FLOOR_RIGID_BOOST * rigid).coerceIn(0.0, 1.0),
+            offAxisDampingZetaMin = (offAxisDampingZetaMinMapped + FOLLOW_FIXED_HOLD_ZETA_RIGID_BOOST * rigid).coerceAtLeast(1.0)
+        )
+    }
+
     fun stepLeakyVectorBias(
         current: Vector3d,
         error: Vector3d,
@@ -619,13 +757,46 @@ internal object PhysBearingServoMath {
         maxMagnitude: Double,
         freezeIntegrate: Boolean
     ): Vector3d {
-        if (!dtSec.isFinite() || dtSec <= 0.0 || !ki.isFinite() || !leakPerSec.isFinite() || !maxMagnitude.isFinite()) {
+        return stepLeakyVectorBiasBounded(
+            current = current,
+            error = error,
+            dtSec = dtSec,
+            ki = ki,
+            leakPerSec = leakPerSec,
+            maxMagnitude = maxMagnitude,
+            maxDeltaPerSec = Double.POSITIVE_INFINITY,
+            leakBoost = 1.0,
+            freezeIntegrate = freezeIntegrate
+        )
+    }
+
+    fun stepLeakyVectorBiasBounded(
+        current: Vector3d,
+        error: Vector3d,
+        dtSec: Double,
+        ki: Double,
+        leakPerSec: Double,
+        maxMagnitude: Double,
+        maxDeltaPerSec: Double,
+        leakBoost: Double,
+        freezeIntegrate: Boolean
+    ): Vector3d {
+        if (
+            !dtSec.isFinite() ||
+            dtSec <= 0.0 ||
+            !ki.isFinite() ||
+            !leakPerSec.isFinite() ||
+            !maxMagnitude.isFinite() ||
+            maxDeltaPerSec.isNaN() ||
+            !leakBoost.isFinite()
+        ) {
             return Vector3d()
         }
 
-        val next = if (current.isFiniteVec()) current.get(Vector3d()) else Vector3d()
+        val base = if (current.isFiniteVec()) current.get(Vector3d()) else Vector3d()
+        val next = base.get(Vector3d())
         val safeError = if (error.isFiniteVec()) error else Vector3d()
-        val safeLeak = leakPerSec.coerceAtLeast(0.0)
+        val safeLeak = leakPerSec.coerceAtLeast(0.0) * leakBoost.coerceAtLeast(0.0)
         val decay = exp((-safeLeak * dtSec).coerceAtMost(0.0)).coerceIn(0.0, 1.0)
         next.mul(decay)
 
@@ -638,6 +809,15 @@ internal object PhysBearingServoMath {
 
         val cap = maxMagnitude.coerceAtLeast(0.0)
         if (cap <= 0.0) return Vector3d()
+        val maxDelta = maxDeltaPerSec.coerceAtLeast(0.0) * dtSec
+        if (maxDelta.isFinite()) {
+            val delta = next.sub(base, Vector3d())
+            val deltaLen = delta.length()
+            if (deltaLen.isFinite() && deltaLen > maxDelta && deltaLen > 1.0e-9) {
+                delta.mul(maxDelta / deltaLen)
+                next.set(base).add(delta)
+            }
+        }
 
         val len = next.length()
         if (!len.isFinite()) return Vector3d()
@@ -685,6 +865,44 @@ internal object PhysBearingServoMath {
                 tiltBiasMagnitude >= tiltBand * 1.8
         return stepHysteresisLatch(
             previouslyActive = previouslyAllowed,
+            previousTicks = previousTicks,
+            eligible = true,
+            enterCondition = enter,
+            exitCondition = exit,
+            enterTicksRequired = enterTicksRequired.coerceAtLeast(1)
+        )
+    }
+
+    fun stepUltraSleep(
+        previouslyActive: Boolean,
+        previousTicks: Int,
+        ultraStable: Boolean,
+        seatBiasMagnitude: Double,
+        tiltBiasMagnitude: Double,
+        seatBiasZeroBand: Double,
+        tiltBiasZeroBand: Double,
+        enterTicksRequired: Int,
+        exitMultiplier: Double
+    ): HysteresisLatchState {
+        if (
+            !seatBiasMagnitude.isFinite() ||
+            !tiltBiasMagnitude.isFinite() ||
+            !seatBiasZeroBand.isFinite() ||
+            !tiltBiasZeroBand.isFinite() ||
+            !exitMultiplier.isFinite()
+        ) {
+            return HysteresisLatchState(active = false, ticks = 0)
+        }
+        val seatBand = seatBiasZeroBand.coerceAtLeast(1.0e-9)
+        val tiltBand = tiltBiasZeroBand.coerceAtLeast(1.0e-9)
+        val exitScale = exitMultiplier.coerceAtLeast(1.0)
+        val enter = ultraStable && seatBiasMagnitude <= seatBand && tiltBiasMagnitude <= tiltBand
+        val exit =
+            !ultraStable ||
+                seatBiasMagnitude >= seatBand * exitScale ||
+                tiltBiasMagnitude >= tiltBand * exitScale
+        return stepHysteresisLatch(
+            previouslyActive = previouslyActive,
             previousTicks = previousTicks,
             eligible = true,
             enterCondition = enter,
@@ -812,8 +1030,8 @@ internal object PhysBearingServoMath {
     private const val FOLLOW_HOLD_KP_ALPHA_MAX = 90.0
     private const val FOLLOW_HOLD_KD_ALPHA_MIN = 2.0
     private const val FOLLOW_HOLD_KD_ALPHA_MAX = 16.0
-    private const val FOLLOW_HOLD_DAMPING_ZETA_MIN = 1.1
-    private const val FOLLOW_HOLD_DAMPING_ZETA_MAX = 1.5
+    private const val FOLLOW_HOLD_DAMPING_ZETA_MIN = 1.25
+    private const val FOLLOW_HOLD_DAMPING_ZETA_MAX = 1.90
     private const val FOLLOW_HOLD_RINGDOWN_KD_BOOST_MIN = 1.25
     private const val FOLLOW_HOLD_RINGDOWN_KD_BOOST_MAX = 1.80
     private const val FOLLOW_HOLD_MAX_ALPHA_MIN = 8.0
@@ -851,23 +1069,55 @@ internal object PhysBearingServoMath {
     private const val FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MIN = 0.32
     private const val FOLLOW_HOLD_REST_TILT_STIFFNESS_FLOOR_MAX = 0.64
     private const val FOLLOW_HOLD_SEAT_BIAS_KI_MIN = 0.20
-    private const val FOLLOW_HOLD_SEAT_BIAS_KI_MAX = 2.10
-    private const val FOLLOW_HOLD_SEAT_BIAS_LEAK_MIN = 0.70
-    private const val FOLLOW_HOLD_SEAT_BIAS_LEAK_MAX = 2.40
-    private const val FOLLOW_HOLD_SEAT_BIAS_MAX_ACCEL_MIN = 0.40
-    private const val FOLLOW_HOLD_SEAT_BIAS_MAX_ACCEL_MAX = 6.00
+    private const val FOLLOW_HOLD_SEAT_BIAS_KI_MAX = 0.80
+    private const val FOLLOW_HOLD_SEAT_BIAS_LEAK_MIN = 1.40
+    private const val FOLLOW_HOLD_SEAT_BIAS_LEAK_MAX = 4.00
+    private const val FOLLOW_HOLD_SEAT_BIAS_MAX_ACCEL_MIN = 0.35
+    private const val FOLLOW_HOLD_SEAT_BIAS_MAX_ACCEL_MAX = 3.80
     private const val FOLLOW_HOLD_TILT_BIAS_KI_MIN = 0.18
-    private const val FOLLOW_HOLD_TILT_BIAS_KI_MAX = 1.90
-    private const val FOLLOW_HOLD_TILT_BIAS_LEAK_MIN = 0.65
-    private const val FOLLOW_HOLD_TILT_BIAS_LEAK_MAX = 2.20
-    private const val FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MIN = 0.50
-    private const val FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MAX = 24.0
-    private const val FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MIN = 4.0
-    private const val FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MAX = 14.0
-    private const val FOLLOW_HOLD_POST_BRAKE_KD_BOOST_MIN = 1.20
-    private const val FOLLOW_HOLD_POST_BRAKE_KD_BOOST_MAX = 2.20
+    private const val FOLLOW_HOLD_TILT_BIAS_KI_MAX = 0.75
+    private const val FOLLOW_HOLD_TILT_BIAS_LEAK_MIN = 1.30
+    private const val FOLLOW_HOLD_TILT_BIAS_LEAK_MAX = 3.80
+    private const val FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MIN = 0.45
+    private const val FOLLOW_HOLD_TILT_BIAS_MAX_ALPHA_MAX = 12.0
+    private const val FOLLOW_HOLD_BIAS_FREEZE_TICKS_MIN = 2.0
+    private const val FOLLOW_HOLD_BIAS_FREEZE_TICKS_MAX = 7.0
+    private const val FOLLOW_HOLD_BIAS_LEAK_BOOST_ON_FLIP_MIN = 1.30
+    private const val FOLLOW_HOLD_BIAS_LEAK_BOOST_ON_FLIP_MAX = 3.00
+    private const val FOLLOW_HOLD_SEAT_BIAS_SLEW_PER_SEC_MIN = 0.25
+    private const val FOLLOW_HOLD_SEAT_BIAS_SLEW_PER_SEC_MAX = 1.10
+    private const val FOLLOW_HOLD_TILT_BIAS_SLEW_PER_SEC_MIN = 0.35
+    private const val FOLLOW_HOLD_TILT_BIAS_SLEW_PER_SEC_MAX = 1.40
+    private const val FOLLOW_HOLD_ACQUIRE_TICKS_MIN = 5.0
+    private const val FOLLOW_HOLD_ACQUIRE_TICKS_MAX = 12.0
+    private const val FOLLOW_HOLD_SPAWN_SETTLE_TICKS_MIN = 8.0
+    private const val FOLLOW_HOLD_SPAWN_SETTLE_TICKS_MAX = 16.0
+    private const val FOLLOW_HOLD_ACQUIRE_KP_SCALE_MIN = 0.62
+    private const val FOLLOW_HOLD_ACQUIRE_KP_SCALE_MAX = 0.40
+    private const val FOLLOW_HOLD_ACQUIRE_KD_BOOST_MIN = 1.30
+    private const val FOLLOW_HOLD_ACQUIRE_KD_BOOST_MAX = 2.00
+    private const val FOLLOW_FIXED_HOLD_SEAT_AUTH_FLOOR_MIN = 0.22
+    private const val FOLLOW_FIXED_HOLD_SEAT_AUTH_FLOOR_MAX = 0.72
+    private const val FOLLOW_FIXED_HOLD_TILT_AUTH_FLOOR_MIN = 0.24
+    private const val FOLLOW_FIXED_HOLD_TILT_AUTH_FLOOR_MAX = 0.78
+    private const val FOLLOW_FIXED_HOLD_SEAT_KP_FLOOR_MIN = 0.20
+    private const val FOLLOW_FIXED_HOLD_SEAT_KP_FLOOR_MAX = 0.65
+    private const val FOLLOW_FIXED_HOLD_TILT_STIFFNESS_FLOOR_MIN = 0.18
+    private const val FOLLOW_FIXED_HOLD_TILT_STIFFNESS_FLOOR_MAX = 0.72
+    private const val FOLLOW_FIXED_OFFAXIS_ZETA_MIN = 1.25
+    private const val FOLLOW_FIXED_OFFAXIS_ZETA_MAX = 2.00
+    private const val FOLLOW_FIXED_HOLD_AUTH_RIGID_BOOST = 0.06
+    private const val FOLLOW_FIXED_HOLD_KP_FLOOR_RIGID_BOOST = 0.10
+    private const val FOLLOW_FIXED_HOLD_STIFFNESS_FLOOR_RIGID_BOOST = 0.10
+    private const val FOLLOW_FIXED_HOLD_ZETA_RIGID_BOOST = 0.20
+    private const val FOLLOW_HOLD_SUPPORT_ULTRASLEEP_DAMPING_SCALE = 1.15
+    private const val FOLLOW_HOLD_SUPPORT_ULTRASLEEP_STIFFNESS_SCALE = 0.50
+    private const val FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MIN = 3.0
+    private const val FOLLOW_HOLD_POST_BRAKE_SETTLE_TICKS_MAX = 8.0
+    private const val FOLLOW_HOLD_POST_BRAKE_KD_BOOST_MIN = 1.10
+    private const val FOLLOW_HOLD_POST_BRAKE_KD_BOOST_MAX = 1.55
     private const val FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MIN = 1.00
-    private const val FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MAX = 0.35
+    private const val FOLLOW_HOLD_REST_BIAS_ZERO_BAND_SCALE_MAX = 0.55
     private const val FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MIN = 1.00
     private const val FOLLOW_VERTICAL_HOLD_SEAT_KP_SCALE_MAX = 0.82
     private const val FOLLOW_VERTICAL_HOLD_SEAT_KD_SCALE_MIN = 1.10
@@ -908,10 +1158,10 @@ internal object PhysBearingServoMath {
     private const val FOLLOW_HORIZONTAL_MICRO_KP_FLOOR_MAX = 0.72
     private const val FOLLOW_HORIZONTAL_MICRO_KD_BOOST_MIN = 1.00
     private const val FOLLOW_HORIZONTAL_MICRO_KD_BOOST_MAX = 1.20
-    private const val FOLLOW_HORIZONTAL_OFFAXIS_ZETA_MIN_MIN = 1.10
-    private const val FOLLOW_HORIZONTAL_OFFAXIS_ZETA_MIN_MAX = 1.35
-    private const val FOLLOW_VERTICAL_OFFAXIS_ZETA_MIN_MIN = 1.20
-    private const val FOLLOW_VERTICAL_OFFAXIS_ZETA_MIN_MAX = 1.55
+    private const val FOLLOW_HORIZONTAL_OFFAXIS_ZETA_MIN_MIN = 1.25
+    private const val FOLLOW_HORIZONTAL_OFFAXIS_ZETA_MIN_MAX = 2.00
+    private const val FOLLOW_VERTICAL_OFFAXIS_ZETA_MIN_MIN = 1.25
+    private const val FOLLOW_VERTICAL_OFFAXIS_ZETA_MIN_MAX = 2.00
     private const val FOLLOW_HOLD_AUTH_FLOOR_MIN = 0.48
     private const val FOLLOW_HOLD_AUTH_FLOOR_MAX = 0.78
     private const val FOLLOW_HOLD_AUTH_FLOOR_RIGID_BOOST = 0.15

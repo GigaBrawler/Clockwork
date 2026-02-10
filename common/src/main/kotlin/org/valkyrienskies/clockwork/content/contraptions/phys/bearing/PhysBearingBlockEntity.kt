@@ -130,14 +130,32 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     private var lastAligningState = false
     private var missingSubShipTicks = 0
 
-    private var followAngleStalled = false
-    private var followAngleStallTicks = 0
-    private var followAngleStallDirSign = 0
-    private var lastActualAngleRadForStall: Double? = null
-    private var followStallCommandGraceTicks = 0
-    private var followStallClearMotionTicks = 0
-    private var followStallPrevCmdMagDegPerTick = 0.0
-    private var followStallPrevCmdSign = 0
+    private val followState = PhysBearingFollowState()
+
+    private var followAngleStalled: Boolean
+        get() = followState.followAngleStalled
+        set(value) { followState.followAngleStalled = value }
+    private var followAngleStallTicks: Int
+        get() = followState.followAngleStallTicks
+        set(value) { followState.followAngleStallTicks = value }
+    private var followAngleStallDirSign: Int
+        get() = followState.followAngleStallDirSign
+        set(value) { followState.followAngleStallDirSign = value }
+    private var lastActualAngleRadForStall: Double?
+        get() = followState.lastActualAngleRadForStall
+        set(value) { followState.lastActualAngleRadForStall = value }
+    private var followStallCommandGraceTicks: Int
+        get() = followState.followStallCommandGraceTicks
+        set(value) { followState.followStallCommandGraceTicks = value }
+    private var followStallClearMotionTicks: Int
+        get() = followState.followStallClearMotionTicks
+        set(value) { followState.followStallClearMotionTicks = value }
+    private var followStallPrevCmdMagDegPerTick: Double
+        get() = followState.followStallPrevCmdMagDegPerTick
+        set(value) { followState.followStallPrevCmdMagDegPerTick = value }
+    private var followStallPrevCmdSign: Int
+        get() = followState.followStallPrevCmdSign
+        set(value) { followState.followStallPrevCmdSign = value }
 
     // Phys-thread reads these; game-thread writes them.
     @Volatile private var servoMode: LockedMode = LockedMode.UNLOCKED
@@ -162,45 +180,137 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     @Volatile private var servoTiltWn: Double = 0.0
     @Volatile private var servoTiltDampingRatio: Double = 0.0
     @Volatile private var servoTiltTorqueLimit: Double = 0.0
-    private var physServoTickCounter: Int = 0
+    private var physServoTickCounter: Int
+        get() = followState.physServoTickCounter
+        set(value) { followState.physServoTickCounter = value }
     // Phys-thread filtered feedback used to avoid exciting solver jitter near hold.
-    @Volatile private var servoOmegaActualFilteredRadSec: Double = 0.0
-    @Volatile private var servoAlphaCmdFilteredRadSec2: Double = 0.0
+    private var servoOmegaActualFilteredRadSec: Double
+        get() = followState.servoOmegaActualFilteredRadSec
+        set(value) { followState.servoOmegaActualFilteredRadSec = value }
+    private var servoAlphaCmdFilteredRadSec2: Double
+        get() = followState.servoAlphaCmdFilteredRadSec2
+        set(value) { followState.servoAlphaCmdFilteredRadSec2 = value }
     // Compensates unmodeled downstream inertia (e.g., bearing chains) by matching commanded vs observed response.
-    @Volatile private var servoApparentInertiaScale: Double = 1.0
-    @Volatile private var servoPrevOmegaActualForApparentInertiaScaleRadSec: Double = Double.NaN
-    @Volatile private var servoPrevAppliedHingeTorqueMag: Double = 0.0
-    @Volatile private var tickTrackTorqueAuthority: Double = 1.0
-    @Volatile private var tickHoldStabilizerAuthority: Double = 1.0
-    @Volatile private var tickChainedDynamic: Boolean = false
-    @Volatile private var tickGyroRisk: Boolean = false
-    @Volatile private var tickFollowModeActive: Boolean = false
-    @Volatile private var tickFollowBrakePhase: Boolean = false
-    @Volatile private var tickFollowHoldPhase: Boolean = false
-    @Volatile private var tickFollowRestStable: Boolean = false
-    @Volatile private var tickFollowRigidRest: Boolean = false
-    @Volatile private var tickFollowRigidRestBlend: Double = 0.0
-    @Volatile private var tickFollowHingeMicroSuppressed: Boolean = false
-    @Volatile private var tickFollowSeatMicroSuppressed: Boolean = false
-    @Volatile private var tickFollowTiltMicroSuppressed: Boolean = false
-    @Volatile private var tickFollowSeatRestBandSatisfied: Boolean = false
-    @Volatile private var tickFollowTiltRestBandSatisfied: Boolean = false
-    @Volatile private var tickFollowRestUltraStable: Boolean = false
-    @Volatile private var omegaEmaRadSec: Double = 0.0
-    @Volatile private var appInertiaConsistentTicks: Int = 0
-    @Volatile private var followRestStableTicks: Int = 0
-    @Volatile private var followRestUltraStableTicks: Int = 0
-    @Volatile private var followRigidRestTicks: Int = 0
-    @Volatile private var followHingeMicroTicks: Int = 0
-    @Volatile private var followSeatMicroTicks: Int = 0
-    @Volatile private var followTiltMicroTicks: Int = 0
-    @Volatile private var followHoldSettleTicksRemaining: Int = 0
-    @Volatile private var followHoldCaptureTicks: Int = 0
-    @Volatile private var followHoldEmergencyReleaseTicks: Int = 0
-    @Volatile private var followHoldRingDownTicks: Int = 0
-    @Volatile private var followHoldLastErrorSign: Int = 0
-    @Volatile private var followWasTrackLastTick: Boolean = false
-    @Volatile private var followBrakeHoldAngleRad: Double? = null
+    private var servoApparentInertiaScale: Double
+        get() = followState.servoApparentInertiaScale
+        set(value) { followState.servoApparentInertiaScale = value }
+    private var servoPrevOmegaActualForApparentInertiaScaleRadSec: Double
+        get() = followState.servoPrevOmegaActualForApparentInertiaScaleRadSec
+        set(value) { followState.servoPrevOmegaActualForApparentInertiaScaleRadSec = value }
+    private var servoPrevAppliedHingeTorqueMag: Double
+        get() = followState.servoPrevAppliedHingeTorqueMag
+        set(value) { followState.servoPrevAppliedHingeTorqueMag = value }
+    private var tickTrackTorqueAuthority: Double
+        get() = followState.tickTrackTorqueAuthority
+        set(value) { followState.tickTrackTorqueAuthority = value }
+    private var tickHoldStabilizerAuthority: Double
+        get() = followState.tickHoldStabilizerAuthority
+        set(value) { followState.tickHoldStabilizerAuthority = value }
+    private var tickChainedDynamic: Boolean
+        get() = followState.tickChainedDynamic
+        set(value) { followState.tickChainedDynamic = value }
+    private var tickGyroRisk: Boolean
+        get() = followState.tickGyroRisk
+        set(value) { followState.tickGyroRisk = value }
+    private var tickFollowModeActive: Boolean
+        get() = followState.tickFollowModeActive
+        set(value) { followState.tickFollowModeActive = value }
+    private var tickFollowBrakePhase: Boolean
+        get() = followState.tickFollowBrakePhase
+        set(value) { followState.tickFollowBrakePhase = value }
+    private var tickFollowHoldPhase: Boolean
+        get() = followState.tickFollowHoldPhase
+        set(value) { followState.tickFollowHoldPhase = value }
+    private var tickFollowRestStable: Boolean
+        get() = followState.tickFollowRestStable
+        set(value) { followState.tickFollowRestStable = value }
+    private var tickFollowRigidRest: Boolean
+        get() = followState.tickFollowRigidRest
+        set(value) { followState.tickFollowRigidRest = value }
+    private var tickFollowRigidRestBlend: Double
+        get() = followState.tickFollowRigidRestBlend
+        set(value) { followState.tickFollowRigidRestBlend = value }
+    private var tickFollowHingeMicroSuppressed: Boolean
+        get() = followState.tickFollowHingeMicroSuppressed
+        set(value) { followState.tickFollowHingeMicroSuppressed = value }
+    private var tickFollowSeatMicroSuppressed: Boolean
+        get() = followState.tickFollowSeatMicroSuppressed
+        set(value) { followState.tickFollowSeatMicroSuppressed = value }
+    private var tickFollowTiltMicroSuppressed: Boolean
+        get() = followState.tickFollowTiltMicroSuppressed
+        set(value) { followState.tickFollowTiltMicroSuppressed = value }
+    private var tickFollowSeatRestBandSatisfied: Boolean
+        get() = followState.tickFollowSeatRestBandSatisfied
+        set(value) { followState.tickFollowSeatRestBandSatisfied = value }
+    private var tickFollowTiltRestBandSatisfied: Boolean
+        get() = followState.tickFollowTiltRestBandSatisfied
+        set(value) { followState.tickFollowTiltRestBandSatisfied = value }
+    private var tickFollowRestUltraStable: Boolean
+        get() = followState.tickFollowRestUltraStable
+        set(value) { followState.tickFollowRestUltraStable = value }
+    private var tickFollowUltraSleep: Boolean
+        get() = followState.tickFollowUltraSleep
+        set(value) { followState.tickFollowUltraSleep = value }
+    private var omegaEmaRadSec: Double
+        get() = followState.omegaEmaRadSec
+        set(value) { followState.omegaEmaRadSec = value }
+    private var appInertiaConsistentTicks: Int
+        get() = followState.appInertiaConsistentTicks
+        set(value) { followState.appInertiaConsistentTicks = value }
+    private var followRestStableTicks: Int
+        get() = followState.followRestStableTicks
+        set(value) { followState.followRestStableTicks = value }
+    private var followRestUltraStableTicks: Int
+        get() = followState.followRestUltraStableTicks
+        set(value) { followState.followRestUltraStableTicks = value }
+    private var followUltraSleepTicks: Int
+        get() = followState.followUltraSleepTicks
+        set(value) { followState.followUltraSleepTicks = value }
+    private var followRigidRestTicks: Int
+        get() = followState.followRigidRestTicks
+        set(value) { followState.followRigidRestTicks = value }
+    private var followHingeMicroTicks: Int
+        get() = followState.followHingeMicroTicks
+        set(value) { followState.followHingeMicroTicks = value }
+    private var followSeatMicroTicks: Int
+        get() = followState.followSeatMicroTicks
+        set(value) { followState.followSeatMicroTicks = value }
+    private var followTiltMicroTicks: Int
+        get() = followState.followTiltMicroTicks
+        set(value) { followState.followTiltMicroTicks = value }
+    private var followHoldAcquireTicksRemaining: Int
+        get() = followState.followHoldAcquireTicksRemaining
+        set(value) { followState.followHoldAcquireTicksRemaining = value }
+    private var followHoldSettleTicksRemaining: Int
+        get() = followState.followHoldSettleTicksRemaining
+        set(value) { followState.followHoldSettleTicksRemaining = value }
+    private var followSpawnSettleTicksRemaining: Int
+        get() = followState.followSpawnSettleTicksRemaining
+        set(value) { followState.followSpawnSettleTicksRemaining = value }
+    private var followSeatBiasFreezeTicks: Int
+        get() = followState.followSeatBiasFreezeTicks
+        set(value) { followState.followSeatBiasFreezeTicks = value }
+    private var followTiltBiasFreezeTicks: Int
+        get() = followState.followTiltBiasFreezeTicks
+        set(value) { followState.followTiltBiasFreezeTicks = value }
+    private var followHoldCaptureTicks: Int
+        get() = followState.followHoldCaptureTicks
+        set(value) { followState.followHoldCaptureTicks = value }
+    private var followHoldEmergencyReleaseTicks: Int
+        get() = followState.followHoldEmergencyReleaseTicks
+        set(value) { followState.followHoldEmergencyReleaseTicks = value }
+    private var followHoldRingDownTicks: Int
+        get() = followState.followHoldRingDownTicks
+        set(value) { followState.followHoldRingDownTicks = value }
+    private var followHoldLastErrorSign: Int
+        get() = followState.followHoldLastErrorSign
+        set(value) { followState.followHoldLastErrorSign = value }
+    private var followWasTrackLastTick: Boolean
+        get() = followState.followWasTrackLastTick
+        set(value) { followState.followWasTrackLastTick = value }
+    private var followBrakeHoldAngleRad: Double?
+        get() = followState.followBrakeHoldAngleRad
+        set(value) { followState.followBrakeHoldAngleRad = value }
     @Volatile private var followBrakeRateRadSec: Double = 0.0
     @Volatile private var followBrakeStaticAlphaRadSec2: Double = 0.0
     @Volatile private var followBrakeMaxAlphaRadSec2: Double = 0.0
@@ -235,11 +345,34 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     @Volatile private var followHoldTiltBiasKi: Double = 0.0
     @Volatile private var followHoldTiltBiasLeak: Double = 0.0
     @Volatile private var followHoldTiltBiasMaxAlpha: Double = 0.0
+    @Volatile private var followHoldBiasFreezeTicks: Int = 0
+    @Volatile private var followHoldBiasLeakBoostOnFlip: Double = 1.0
+    @Volatile private var followHoldSeatBiasSlewPerSec: Double = 0.0
+    @Volatile private var followHoldTiltBiasSlewPerSec: Double = 0.0
+    @Volatile private var followHoldAcquireTicks: Int = 0
+    @Volatile private var followHoldSpawnSettleTicks: Int = 0
+    @Volatile private var followHoldAcquireKpScale: Double = 1.0
+    @Volatile private var followHoldAcquireKdBoost: Double = 1.0
     @Volatile private var followHoldPostBrakeSettleTicks: Int = 0
     @Volatile private var followHoldPostBrakeKdBoost: Double = 1.0
     @Volatile private var followHoldRestBiasZeroBandScale: Double = 1.0
-    @Volatile private var followSeatHoldBiasAccWorld: Vector3d = Vector3d()
-    @Volatile private var followTiltHoldBiasAlphaWorld: Vector3d = Vector3d()
+    @Volatile private var followFixedHoldSeatAuthorityFloor: Double = 0.22
+    @Volatile private var followFixedHoldTiltAuthorityFloor: Double = 0.24
+    @Volatile private var followFixedHoldSeatKpFloorScale: Double = 0.20
+    @Volatile private var followFixedHoldTiltStiffnessFloor: Double = 0.18
+    @Volatile private var followFixedOffAxisDampingZetaMin: Double = 1.25
+    private var followSeatHoldBiasAccWorld: Vector3d
+        get() = followState.followSeatHoldBiasAccWorld
+        set(value) { followState.followSeatHoldBiasAccWorld = value }
+    private var followTiltHoldBiasAlphaWorld: Vector3d
+        get() = followState.followTiltHoldBiasAlphaWorld
+        set(value) { followState.followTiltHoldBiasAlphaWorld = value }
+    private var followPrevSeatBiasErrorWorld: Vector3d
+        get() = followState.followPrevSeatBiasErrorWorld
+        set(value) { followState.followPrevSeatBiasErrorWorld = value }
+    private var followPrevTiltBiasErrorWorld: Vector3d
+        get() = followState.followPrevTiltBiasErrorWorld
+        set(value) { followState.followPrevTiltBiasErrorWorld = value }
 
     private var controllerCreationData: PhysBearingData? = null
     private var controllerUpdateData: PhysBearingUpdateData? = null
@@ -374,9 +507,22 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         followHoldTiltBiasKi = followParams.holdTiltBiasKi
         followHoldTiltBiasLeak = followParams.holdTiltBiasLeak
         followHoldTiltBiasMaxAlpha = followParams.holdTiltBiasMaxAlpha
+        followHoldBiasFreezeTicks = followParams.holdBiasFreezeTicks
+        followHoldBiasLeakBoostOnFlip = followParams.holdBiasLeakBoostOnFlip
+        followHoldSeatBiasSlewPerSec = followParams.holdSeatBiasSlewPerSec
+        followHoldTiltBiasSlewPerSec = followParams.holdTiltBiasSlewPerSec
+        followHoldAcquireTicks = followParams.holdAcquireTicks
+        followHoldSpawnSettleTicks = followParams.holdSpawnSettleTicks
+        followHoldAcquireKpScale = followParams.holdAcquireKpScale
+        followHoldAcquireKdBoost = followParams.holdAcquireKdBoost
         followHoldPostBrakeSettleTicks = followParams.holdPostBrakeSettleTicks
         followHoldPostBrakeKdBoost = followParams.holdPostBrakeKdBoost
         followHoldRestBiasZeroBandScale = followParams.holdRestBiasZeroBandScale
+        followFixedHoldSeatAuthorityFloor = followParams.fixedHoldSeatAuthorityFloor
+        followFixedHoldTiltAuthorityFloor = followParams.fixedHoldTiltAuthorityFloor
+        followFixedHoldSeatKpFloorScale = followParams.fixedHoldSeatKpFloorScale
+        followFixedHoldTiltStiffnessFloor = followParams.fixedHoldTiltStiffnessFloor
+        followFixedOffAxisDampingZetaMin = followParams.fixedOffAxisDampingZetaMin
     }
 
     private fun computeJointMaxForceTorque(): VSJointMaxForceTorque {
@@ -475,44 +621,151 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         return joint.copy(pose0 = newPose0, pose1 = newPose1)
     }
 
+    private enum class JointKind {
+        REVOLUTE,
+        FIXED
+    }
+
+    private fun desiredJointKind(mode: LockedMode, aligningNow: Boolean): JointKind {
+        return if (PhysBearingFollowController.isLockedFixedMode(mode, aligningNow)) {
+            JointKind.FIXED
+        } else {
+            JointKind.REVOLUTE
+        }
+    }
+
+    private fun Quaterniondc.isFiniteQuat(): Boolean {
+        return x().isFinite() && y().isFinite() && z().isFinite() && w().isFinite()
+    }
+
+    private fun toRevoluteJoint(joint: VSJoint): VSRevoluteJoint {
+        val maxForceTorque = computeJointMaxForceTorque()
+        return when (joint) {
+            is VSRevoluteJoint -> joint.copy(
+                maxForceTorque = maxForceTorque,
+                compliance = SERVO_COMPLIANCE,
+                driveVelocity = null,
+                driveForceLimit = null,
+                driveGearRatio = null
+            )
+            is VSFixedJoint -> VSRevoluteJoint(
+                joint.shipId0,
+                joint.pose0,
+                joint.shipId1,
+                joint.pose1,
+                maxForceTorque = maxForceTorque,
+                compliance = SERVO_COMPLIANCE,
+                driveFreeSpin = true
+            )
+            else -> throw IllegalArgumentException("Unsupported joint type for revolute conversion: ${joint::class.java.simpleName}")
+        }
+    }
+
+    private fun toFixedJointFromCurrentPose(joint: VSJoint): VSFixedJoint {
+        val maxForceTorque = computeJointMaxForceTorque()
+        return when (joint) {
+            is VSFixedJoint -> joint.copy(maxForceTorque = maxForceTorque)
+            is VSRevoluteJoint -> VSFixedJoint(
+                joint.shipId0,
+                joint.pose0,
+                joint.shipId1,
+                joint.pose1,
+                maxForceTorque
+            )
+            else -> throw IllegalArgumentException("Unsupported joint type for fixed conversion: ${joint::class.java.simpleName}")
+        }
+    }
+
+    private fun toLockedFixedJointSnap(
+        revolute: VSRevoluteJoint,
+        targetAngleRad: Double,
+        level: ServerLevel
+    ): VSFixedJoint {
+        val maxForceTorque = computeJointMaxForceTorque()
+        val subId = revolute.shipId0 ?: return toFixedJointFromCurrentPose(revolute)
+        val subShip = level.shipObjectWorld.loadedShips.getById(subId) ?: return toFixedJointFromCurrentPose(revolute)
+        val mainShip = revolute.shipId1?.let { level.shipObjectWorld.loadedShips.getById(it) }
+
+        val currentAngleRad = getAngle(bearingAxis, subShip.transform, mainShip?.transform)
+        if (!currentAngleRad.isFinite() || !targetAngleRad.isFinite()) return toFixedJointFromCurrentPose(revolute)
+        val deltaRad = PhysBearingFollowController.normalizedSnapDeltaRad(targetAngleRad, currentAngleRad)
+
+        val axisWorld = bearingAxis.get(Vector3d())
+        mainShip?.transform?.shipToWorldRotation?.transform(axisWorld)
+        if (!axisWorld.isFiniteVec() || axisWorld.lengthSquared() < 1.0e-12) return toFixedJointFromCurrentPose(revolute)
+        axisWorld.normalize()
+
+        val subRotWorld = Quaterniond(subShip.transform.shipToWorldRotation)
+        val mainRotWorld = if (mainShip != null) Quaterniond(mainShip.transform.shipToWorldRotation) else Quaterniond()
+        if (!subRotWorld.isFiniteQuat() || !mainRotWorld.isFiniteQuat()) return toFixedJointFromCurrentPose(revolute)
+
+        val sharedFrameWorld = if (mainShip != null) {
+            Quaterniond(mainRotWorld).mul(revolute.pose1.rot, Quaterniond())
+        } else {
+            Quaterniond(revolute.pose1.rot)
+        }.normalize()
+
+        val deltaWorld = Quaterniond(AxisAngle4d(deltaRad, axisWorld))
+        val desiredSubRotWorld = deltaWorld.mul(subRotWorld, Quaterniond()).normalize()
+        if (!sharedFrameWorld.isFiniteQuat() || !desiredSubRotWorld.isFiniteQuat()) return toFixedJointFromCurrentPose(revolute)
+
+        val pose0Rot = Quaterniond(desiredSubRotWorld)
+            .conjugate()
+            .mul(sharedFrameWorld, Quaterniond())
+            .normalize()
+        if (!pose0Rot.isFiniteQuat()) return toFixedJointFromCurrentPose(revolute)
+
+        return VSFixedJoint(
+            revolute.shipId0,
+            VSJointPose(revolute.pose0.pos, pose0Rot),
+            revolute.shipId1,
+            VSJointPose(revolute.pose1.pos, revolute.pose1.rot),
+            maxForceTorque
+        )
+    }
+
     private fun updateDrive() {
         val level = level as? ServerLevel ?: return
         val existing = joint ?: return
         val mode = movementMode?.get() ?: LockedMode.UNLOCKED
-        val maxForceTorque = computeJointMaxForceTorque()
-
-        // Keep the joint REVOLUTE in all modes; servo is implemented via driveVelocity in physTick.
-        val revolute = when (existing) {
-            is VSRevoluteJoint -> existing
-            is VSFixedJoint -> VSRevoluteJoint(
-                existing.shipId0, existing.pose0, existing.shipId1, existing.pose1,
-                maxForceTorque = maxForceTorque,
-                compliance = SERVO_COMPLIANCE,
-                driveFreeSpin = true
-            )
-            else -> return
-        }
-
         val servoActive = aligning || mode != LockedMode.UNLOCKED
-        val baseJoint = if (servoActive) {
-            revolute.copy(
-                maxForceTorque = maxForceTorque,
-                compliance = SERVO_COMPLIANCE,
-                // We don't rely on the revolute motor for servo behavior; see physTick torque servo.
-                driveVelocity = null,
-                driveForceLimit = null,
-                driveGearRatio = null,
-                driveFreeSpin = false
-            )
-        } else {
-            revolute.copy(
-                maxForceTorque = maxForceTorque,
-                compliance = SERVO_COMPLIANCE,
-                driveVelocity = null,
-                driveForceLimit = null,
-                driveGearRatio = null,
-                driveFreeSpin = true
-            )
+        val desiredKind = desiredJointKind(mode, aligning)
+        val baseJoint: VSJoint = when (desiredKind) {
+            JointKind.FIXED -> {
+                val fixed = when (existing) {
+                    is VSFixedJoint -> existing.copy(maxForceTorque = computeJointMaxForceTorque())
+                    is VSRevoluteJoint -> {
+                        val snapTargetAngleRad = lockedHoldAngleRad ?: Math.toRadians(targetAngle.toDouble())
+                        toLockedFixedJointSnap(existing, snapTargetAngleRad, level)
+                    }
+                    else -> return
+                }
+                clearServoFilterState()
+                fixed
+            }
+            JointKind.REVOLUTE -> {
+                val revolute = toRevoluteJoint(existing)
+                if (servoActive) {
+                    revolute.copy(
+                        maxForceTorque = computeJointMaxForceTorque(),
+                        compliance = SERVO_COMPLIANCE,
+                        // We don't rely on the revolute motor for servo behavior; see physTick torque servo.
+                        driveVelocity = null,
+                        driveForceLimit = null,
+                        driveGearRatio = null,
+                        driveFreeSpin = false
+                    )
+                } else {
+                    revolute.copy(
+                        maxForceTorque = computeJointMaxForceTorque(),
+                        compliance = SERVO_COMPLIANCE,
+                        driveVelocity = null,
+                        driveForceLimit = null,
+                        driveGearRatio = null,
+                        driveFreeSpin = true
+                    )
+                }
+            }
         }
 
         joint = baseJoint
@@ -561,44 +814,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     }
 
     private fun clearServoFilterState() {
-        servoOmegaActualFilteredRadSec = 0.0
-        servoAlphaCmdFilteredRadSec2 = 0.0
-        servoApparentInertiaScale = 1.0
-        servoPrevOmegaActualForApparentInertiaScaleRadSec = Double.NaN
-        servoPrevAppliedHingeTorqueMag = 0.0
-        omegaEmaRadSec = 0.0
-        appInertiaConsistentTicks = 0
-        tickTrackTorqueAuthority = 1.0
-        tickHoldStabilizerAuthority = 1.0
-        tickChainedDynamic = false
-        tickGyroRisk = false
-        tickFollowModeActive = false
-        tickFollowBrakePhase = false
-        tickFollowHoldPhase = false
-        tickFollowRestStable = false
-        tickFollowRigidRest = false
-        tickFollowRigidRestBlend = 0.0
-        tickFollowHingeMicroSuppressed = false
-        tickFollowSeatMicroSuppressed = false
-        tickFollowTiltMicroSuppressed = false
-        tickFollowSeatRestBandSatisfied = false
-        tickFollowTiltRestBandSatisfied = false
-        tickFollowRestUltraStable = false
-        followRestStableTicks = 0
-        followRestUltraStableTicks = 0
-        followRigidRestTicks = 0
-        followHingeMicroTicks = 0
-        followSeatMicroTicks = 0
-        followTiltMicroTicks = 0
-        followHoldSettleTicksRemaining = 0
-        followHoldCaptureTicks = 0
-        followHoldEmergencyReleaseTicks = 0
-        followHoldRingDownTicks = 0
-        followHoldLastErrorSign = 0
-        followWasTrackLastTick = false
-        followBrakeHoldAngleRad = null
-        followSeatHoldBiasAccWorld = Vector3d()
-        followTiltHoldBiasAlphaWorld = Vector3d()
+        followState.resetServoTransientState()
     }
 
     private fun servoStrength01(): Double {
@@ -716,14 +932,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     }
 
     private fun clearFollowAngleStallState() {
-        followAngleStalled = false
-        followAngleStallTicks = 0
-        followAngleStallDirSign = 0
-        lastActualAngleRadForStall = null
-        followStallCommandGraceTicks = 0
-        followStallClearMotionTicks = 0
-        followStallPrevCmdMagDegPerTick = 0.0
-        followStallPrevCmdSign = 0
+        followState.resetStallState()
     }
 
     private fun updateFollowAngleStallState(cmdSpeedDegPerTick: Float) {
@@ -973,13 +1182,39 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val followMode = tickFollowModeActive
         val followBrakePhase = tickFollowBrakePhase
         val followHoldPhase = tickFollowHoldPhase
-        val followRestStable = tickFollowRestStable
         val followRestUltraStable = tickFollowRestUltraStable
+        val followUltraSleep = tickFollowUltraSleep
         val followRigidRest = tickFollowRigidRest
         val followRigidRestBlend = tickFollowRigidRestBlend.coerceIn(0.0, 1.0)
         val followHoldSettleActive = followHoldPhase && followHoldSettleTicksRemaining > 0
+        val followAcquireActive =
+            followHoldPhase &&
+                (followHoldAcquireTicksRemaining > 0 || followSpawnSettleTicksRemaining > 0)
         val followBrakeOrHold = followBrakePhase || followHoldPhase
-        val axisProfile = if (followMode && followHoldPhase) axisHoldProfile else PhysBearingServoMath.AxisHoldProfile.IDENTITY
+        val holdContext = PhysBearingStabilizerController.HoldContext(
+            followMode = followMode,
+            followBrakePhase = followBrakePhase,
+            followHoldPhase = followHoldPhase,
+            followRestUltraStable = followRestUltraStable,
+            followUltraSleep = followUltraSleep,
+            followRigidRest = followRigidRest,
+            followRigidRestBlend = followRigidRestBlend,
+            followHoldSettleActive = followHoldSettleActive,
+            followAcquireActive = followAcquireActive
+        )
+        val axisProfile =
+            if (holdContext.inFollowHold) axisHoldProfile else PhysBearingServoMath.AxisHoldProfile.IDENTITY
+        val fixedHoldFloors = PhysBearingStabilizerController.resolveFixedHoldFloors(
+            context = holdContext,
+            request = PhysBearingStabilizerController.FloorRequest(
+                seatAuthorityFloorMapped = followFixedHoldSeatAuthorityFloor,
+                tiltAuthorityFloorMapped = followFixedHoldTiltAuthorityFloor,
+                seatKpFloorScaleMapped = followFixedHoldSeatKpFloorScale,
+                tiltStiffnessFloorMapped = followFixedHoldTiltStiffnessFloor,
+                offAxisDampingZetaMinMapped = followFixedOffAxisDampingZetaMin,
+                rigidBlend01 = followRigidRestBlend
+            )
+        )
         val authority = if (followMode && followHoldPhase) holdAuthority else trackAuthority
         if (!followMode || !followHoldPhase) {
             tickFollowSeatMicroSuppressed = false
@@ -1075,8 +1310,16 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             followMode &&
                 followHoldPhase &&
                 seatBiasMag > seatBiasMaxAccelNow.coerceAtLeast(1.0e-9) * FOLLOW_HOLD_BIAS_ACTIVE_RATIO
-        if (errorLen < seatErrorDeadbandScaled && relVelLen < seatVelDeadbandScaled && !seatBiasActive) return
-        if (followMode && followHoldPhase && followRestStable && followRestUltraStable && !followHoldSettleActive) {
+        val holdSupportMode = PhysBearingStabilizerController.resolveHoldSupportMode(
+            context = holdContext,
+            biasActive = seatBiasActive
+        )
+        if (
+            errorLen < seatErrorDeadbandScaled &&
+            relVelLen < seatVelDeadbandScaled &&
+            !seatBiasActive &&
+            holdSupportMode.allowNearZeroDropout
+        ) {
             return
         }
         val anchorError = if (errorLen > SERVO_SEAT_MAX_ERROR_M && errorLen > 1.0e-9) {
@@ -1118,6 +1361,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
         var seatKp = seatWn * seatWn * seatKpScale
         var seatKd = 2.0 * seatDamping * seatWn * seatKdScale
+        val seatKpBase = seatKp
         if (followMode && chainedDynamic) {
             val minChainStiffness = when {
                 followHoldPhase && followRigidRest ->
@@ -1137,10 +1381,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 seatKd *= FOLLOW_HOLD_SEAT_KD_MULT
                 seatKp *= axisProfile.seatKpScale
                 seatKd *= axisProfile.seatKdScale
-                if (worldAnchored) {
-                    seatKp *= followHoldWorldSeatKpBoost
-                    seatKd *= followHoldWorldSeatKdBoost
-                }
+                // Apply equally for world/ship placement to keep hold parity.
+                seatKp *= followHoldWorldSeatKpBoost
+                seatKd *= followHoldWorldSeatKdBoost
             }
         }
         if (followMode && followHoldPhase && heavyHoldBlend > 0.0) {
@@ -1173,8 +1416,25 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         if (followMode && followHoldPhase && followHoldSettleActive) {
             seatKd *= followHoldPostBrakeKdBoost.coerceAtLeast(1.0)
         }
+        if (followMode && followHoldPhase && followAcquireActive) {
+            seatKp *= followHoldAcquireKpScale.coerceIn(0.0, 1.0)
+            seatKd *= followHoldAcquireKdBoost.coerceAtLeast(1.0)
+        }
+        if (followMode && followHoldPhase && followRestUltraStable && !followUltraSleep) {
+            seatKp *= FOLLOW_HOLD_ULTRA_STABLE_SEAT_KP_SCALE
+            seatKd *= FOLLOW_HOLD_ULTRA_STABLE_SEAT_KD_BOOST
+        }
         if (followMode && followHoldPhase) {
-            seatKd = PhysBearingServoMath.kdWithFloor(seatKp, seatKd, axisProfile.offAxisDampingZetaMin)
+            seatKp *= holdSupportMode.stiffnessScale
+            seatKd *= holdSupportMode.dampingScale
+        }
+        if (followMode && followHoldPhase) {
+            val seatKpFloorScale = max(FOLLOW_HOLD_ULTRA_STABLE_SEAT_KP_FLOOR, fixedHoldFloors.seatKpFloorScale)
+            seatKp = max(seatKp, seatKpBase * seatKpFloorScale)
+        }
+        if (followMode && followHoldPhase) {
+            val zetaFloor = max(axisProfile.offAxisDampingZetaMin, fixedHoldFloors.offAxisDampingZetaMin)
+            seatKd = PhysBearingServoMath.kdWithFloor(seatKp, seatKd, zetaFloor)
         }
 
         val velSuppressionBase = 1.0 / (1.0 + relVelLen * 2.0)
@@ -1184,7 +1444,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             velSuppressionBase
         }
         val seatAuthorityFloor = if (followMode && followHoldPhase) {
-            max(FOLLOW_HOLD_AUTH_MIN, holdAuthority)
+            max(max(FOLLOW_HOLD_AUTH_MIN, holdAuthority), fixedHoldFloors.seatAuthorityFloor)
         } else {
             AUTH_MIN
         }
@@ -1247,15 +1507,43 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
         if (followMode && followHoldPhase) {
             val seatCorrectiveMotion = anchorError.dot(relVel) < -FOLLOW_HOLD_BIAS_CORRECTIVE_DOT_THRESHOLD
-            followSeatHoldBiasAccWorld = PhysBearingServoMath.stepLeakyVectorBias(
+            val previousBiasError = followPrevSeatBiasErrorWorld.get(Vector3d())
+            val errorFlip =
+                previousBiasError.lengthSquared() > 1.0e-9 &&
+                    anchorError.dot(previousBiasError) < -FOLLOW_HOLD_BIAS_ERROR_FLIP_DOT_THRESHOLD
+            if (errorFlip || seatCorrectiveMotion) {
+                followSeatBiasFreezeTicks = followHoldBiasFreezeTicks
+            } else if (followSeatBiasFreezeTicks > 0) {
+                followSeatBiasFreezeTicks--
+            }
+            val biasFreeze = followSeatBiasFreezeTicks > 0
+            val freezeIntegrate =
+                followAcquireActive ||
+                    followUltraSleep ||
+                    seatAccelSaturated ||
+                    seatForceSaturated ||
+                    seatCorrectiveMotion ||
+                    biasFreeze
+            val leakBoost = if (errorFlip || seatCorrectiveMotion || biasFreeze) {
+                followHoldBiasLeakBoostOnFlip
+            } else {
+                1.0
+            }
+            followSeatHoldBiasAccWorld = PhysBearingServoMath.stepLeakyVectorBiasBounded(
                 current = followSeatHoldBiasAccWorld,
                 error = anchorError,
                 dtSec = SERVO_PHYS_TICK_DT_SEC,
                 ki = followHoldSeatBiasKi,
                 leakPerSec = followHoldSeatBiasLeak,
                 maxMagnitude = seatBiasMaxAccelNow,
-                freezeIntegrate = seatAccelSaturated || seatForceSaturated || seatCorrectiveMotion
+                maxDeltaPerSec = followHoldSeatBiasSlewPerSec,
+                leakBoost = leakBoost,
+                freezeIntegrate = freezeIntegrate
             )
+            followPrevSeatBiasErrorWorld = anchorError.get(Vector3d())
+        } else if (!followMode || !followHoldPhase) {
+            followSeatBiasFreezeTicks = 0
+            followPrevSeatBiasErrorWorld = Vector3d()
         }
 
         if (subDynamic) {
@@ -1284,13 +1572,39 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val followMode = tickFollowModeActive
         val followBrakePhase = tickFollowBrakePhase
         val followHoldPhase = tickFollowHoldPhase
-        val followRestStable = tickFollowRestStable
         val followRestUltraStable = tickFollowRestUltraStable
+        val followUltraSleep = tickFollowUltraSleep
         val followRigidRest = tickFollowRigidRest
         val followRigidRestBlend = tickFollowRigidRestBlend.coerceIn(0.0, 1.0)
         val followHoldSettleActive = followHoldPhase && followHoldSettleTicksRemaining > 0
+        val followAcquireActive =
+            followHoldPhase &&
+                (followHoldAcquireTicksRemaining > 0 || followSpawnSettleTicksRemaining > 0)
         val followBrakeOrHold = followBrakePhase || followHoldPhase
-        val axisProfile = if (followMode && followHoldPhase) axisHoldProfile else PhysBearingServoMath.AxisHoldProfile.IDENTITY
+        val holdContext = PhysBearingStabilizerController.HoldContext(
+            followMode = followMode,
+            followBrakePhase = followBrakePhase,
+            followHoldPhase = followHoldPhase,
+            followRestUltraStable = followRestUltraStable,
+            followUltraSleep = followUltraSleep,
+            followRigidRest = followRigidRest,
+            followRigidRestBlend = followRigidRestBlend,
+            followHoldSettleActive = followHoldSettleActive,
+            followAcquireActive = followAcquireActive
+        )
+        val axisProfile =
+            if (holdContext.inFollowHold) axisHoldProfile else PhysBearingServoMath.AxisHoldProfile.IDENTITY
+        val fixedHoldFloors = PhysBearingStabilizerController.resolveFixedHoldFloors(
+            context = holdContext,
+            request = PhysBearingStabilizerController.FloorRequest(
+                seatAuthorityFloorMapped = followFixedHoldSeatAuthorityFloor,
+                tiltAuthorityFloorMapped = followFixedHoldTiltAuthorityFloor,
+                seatKpFloorScaleMapped = followFixedHoldSeatKpFloorScale,
+                tiltStiffnessFloorMapped = followFixedHoldTiltStiffnessFloor,
+                offAxisDampingZetaMinMapped = followFixedOffAxisDampingZetaMin,
+                rigidBlend01 = followRigidRestBlend
+            )
+        )
         val authority = if (followMode && followHoldPhase) holdAuthority else trackAuthority
         if (!followMode || !followHoldPhase) {
             tickFollowTiltMicroSuppressed = false
@@ -1385,8 +1699,15 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             followMode &&
                 followHoldPhase &&
                 tiltBiasMag > tiltBiasMaxAlphaNow.coerceAtLeast(1.0e-9) * FOLLOW_HOLD_BIAS_ACTIVE_RATIO
-        if ((!offAxisOmegaLen.isFinite() || offAxisOmegaLen < tiltOmegaDeadbandScaled) && swingErrorWorld.length() < 1.0e-6 && !tiltBiasActive) return
-        if (followMode && followHoldPhase && followRestStable && followRestUltraStable && !followHoldSettleActive) {
+        val holdSupportMode = PhysBearingStabilizerController.resolveHoldSupportMode(
+            context = holdContext,
+            biasActive = tiltBiasActive
+        )
+        if (
+            ((!offAxisOmegaLen.isFinite() || offAxisOmegaLen < tiltOmegaDeadbandScaled) && swingErrorWorld.length() < 1.0e-6) &&
+            !tiltBiasActive &&
+            holdSupportMode.allowNearZeroDropout
+        ) {
             return
         }
 
@@ -1406,6 +1727,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
         var tiltKp = tiltWn * tiltWn * tiltKpScale
         var tiltKd = 2.0 * tiltDamping * tiltWn * tiltKdScale
+        val tiltKpBase = tiltKp
         if (followMode && chainedDynamic) {
             val minChainStiffness = when {
                 followHoldPhase && followRigidRest ->
@@ -1425,10 +1747,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 tiltKd *= FOLLOW_HOLD_TILT_KD_MULT
                 tiltKp *= axisProfile.tiltKpScale
                 tiltKd *= axisProfile.tiltKdScale
-                if (worldAnchored) {
-                    tiltKp *= followHoldWorldTiltKpBoost
-                    tiltKd *= followHoldWorldTiltKdBoost
-                }
+                // Apply equally for world/ship placement to keep hold parity.
+                tiltKp *= followHoldWorldTiltKpBoost
+                tiltKd *= followHoldWorldTiltKdBoost
                 val rigidBlend = if (followRigidRest) followRigidRestBlend else 0.0
                 tiltKd *= PhysBearingServoMath.holdOffAxisDampingBoost(servoStrength01(), rigidBlend)
             }
@@ -1463,8 +1784,25 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         if (followMode && followHoldPhase && followHoldSettleActive) {
             tiltKd *= followHoldPostBrakeKdBoost.coerceAtLeast(1.0)
         }
+        if (followMode && followHoldPhase && followAcquireActive) {
+            tiltKp *= followHoldAcquireKpScale.coerceIn(0.0, 1.0)
+            tiltKd *= followHoldAcquireKdBoost.coerceAtLeast(1.0)
+        }
+        if (followMode && followHoldPhase && followRestUltraStable && !followUltraSleep) {
+            tiltKp *= FOLLOW_HOLD_ULTRA_STABLE_TILT_KP_SCALE
+            tiltKd *= FOLLOW_HOLD_ULTRA_STABLE_TILT_KD_BOOST
+        }
         if (followMode && followHoldPhase) {
-            tiltKd = PhysBearingServoMath.kdWithFloor(tiltKp, tiltKd, axisProfile.offAxisDampingZetaMin)
+            tiltKp *= holdSupportMode.stiffnessScale
+            tiltKd *= holdSupportMode.dampingScale
+        }
+        if (followMode && followHoldPhase) {
+            val tiltKpFloorScale = max(FOLLOW_HOLD_ULTRA_STABLE_TILT_KP_FLOOR, fixedHoldFloors.seatKpFloorScale)
+            tiltKp = max(tiltKp, tiltKpBase * tiltKpFloorScale)
+        }
+        if (followMode && followHoldPhase) {
+            val zetaFloor = max(axisProfile.offAxisDampingZetaMin, fixedHoldFloors.offAxisDampingZetaMin)
+            tiltKd = PhysBearingServoMath.kdWithFloor(tiltKp, tiltKd, zetaFloor)
         }
         var dampOnlyErrorRad = if (chainedDynamic) {
             lerpClamped(SERVO_TILT_CHAIN_DAMP_ONLY_ERROR_RAD, SERVO_TILT_DAMP_ONLY_ERROR_RAD, chainBlend)
@@ -1502,12 +1840,16 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                     offAxisOmegaLen
                 )
                 val motionFloorScale = lerpClamped(1.0, FOLLOW_HOLD_SETTLE_MOTION_FLOOR_SCALE_MIN, motionFloorBlend)
+                val holdStiffnessFloorBase = max(followHoldRestTiltStiffnessFloor, fixedHoldFloors.tiltStiffnessFloor)
                 val effectiveHoldFloor = (
-                    followHoldRestTiltStiffnessFloor *
+                    holdStiffnessFloorBase *
                         verticalFloorScale *
                         motionFloorScale
-                    ).coerceIn(FOLLOW_HOLD_SETTLE_MIN_STIFFNESS_FLOOR, followHoldRestTiltStiffnessFloor)
+                    ).coerceIn(FOLLOW_HOLD_SETTLE_MIN_STIFFNESS_FLOOR, holdStiffnessFloorBase)
                 stiffnessBlend = max(stiffnessBlend, effectiveHoldFloor)
+            }
+            if (followHoldPhase && followRestUltraStable && !followUltraSleep) {
+                stiffnessBlend = max(stiffnessBlend, max(FOLLOW_HOLD_ULTRA_STABLE_TILT_STIFFNESS_FLOOR, fixedHoldFloors.tiltStiffnessFloor))
             }
         }
 
@@ -1532,7 +1874,13 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 tiltAlphaCmd.add(offAxisOmega.mul(-axisExtraDamping, Vector3d()))
             }
         }
-        tiltAlphaCmd.mul(authority)
+        val tiltAuthorityFloor = if (followMode && followHoldPhase) {
+            max(max(FOLLOW_HOLD_AUTH_MIN, holdAuthority), fixedHoldFloors.tiltAuthorityFloor)
+        } else {
+            AUTH_MIN
+        }
+        val tiltAuthority = authority.coerceIn(tiltAuthorityFloor, 1.0)
+        tiltAlphaCmd.mul(tiltAuthority)
         if (!tiltAlphaCmd.isFiniteVec()) return
         var tiltAlphaLen = tiltAlphaCmd.length()
         var maxTiltAlpha = when {
@@ -1618,15 +1966,43 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         if (followMode && followHoldPhase) {
             val tiltBiasError = swingErrorWorld.mul(-1.0, Vector3d())
             val tiltCorrectiveMotion = tiltBiasError.dot(offAxisOmega) < -FOLLOW_HOLD_BIAS_CORRECTIVE_DOT_THRESHOLD
-            followTiltHoldBiasAlphaWorld = PhysBearingServoMath.stepLeakyVectorBias(
+            val previousBiasError = followPrevTiltBiasErrorWorld.get(Vector3d())
+            val errorFlip =
+                previousBiasError.lengthSquared() > 1.0e-9 &&
+                    tiltBiasError.dot(previousBiasError) < -FOLLOW_HOLD_BIAS_ERROR_FLIP_DOT_THRESHOLD
+            if (errorFlip || tiltCorrectiveMotion) {
+                followTiltBiasFreezeTicks = followHoldBiasFreezeTicks
+            } else if (followTiltBiasFreezeTicks > 0) {
+                followTiltBiasFreezeTicks--
+            }
+            val biasFreeze = followTiltBiasFreezeTicks > 0
+            val freezeIntegrate =
+                followAcquireActive ||
+                    followUltraSleep ||
+                    tiltAlphaSaturated ||
+                    tiltTorqueSaturated ||
+                    tiltCorrectiveMotion ||
+                    biasFreeze
+            val leakBoost = if (errorFlip || tiltCorrectiveMotion || biasFreeze) {
+                followHoldBiasLeakBoostOnFlip
+            } else {
+                1.0
+            }
+            followTiltHoldBiasAlphaWorld = PhysBearingServoMath.stepLeakyVectorBiasBounded(
                 current = followTiltHoldBiasAlphaWorld,
                 error = tiltBiasError,
                 dtSec = SERVO_PHYS_TICK_DT_SEC,
                 ki = followHoldTiltBiasKi,
                 leakPerSec = followHoldTiltBiasLeak,
                 maxMagnitude = tiltBiasMaxAlphaNow,
-                freezeIntegrate = tiltAlphaSaturated || tiltTorqueSaturated || tiltCorrectiveMotion
+                maxDeltaPerSec = followHoldTiltBiasSlewPerSec,
+                leakBoost = leakBoost,
+                freezeIntegrate = freezeIntegrate
             )
+            followPrevTiltBiasErrorWorld = tiltBiasError.get(Vector3d())
+        } else if (!followMode || !followHoldPhase) {
+            followTiltBiasFreezeTicks = 0
+            followPrevTiltBiasErrorWorld = Vector3d()
         }
 
         if (subDynamic) {
@@ -1642,14 +2018,34 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val jointId = jointID
         if (jointId == -1) return
 
-        val revolute = joint as? VSRevoluteJoint ?: return
+        val currentJoint = joint ?: return
         val mode = servoMode
         val servoActive = aligning || mode != LockedMode.UNLOCKED
+        val lockedFixedMode = PhysBearingFollowController.isLockedFixedMode(mode, aligning)
         val followMode = !aligning && mode == LockedMode.FOLLOW_ANGLE
         if (!servoActive) {
             clearServoFilterState()
             return
         }
+        if (currentJoint is VSFixedJoint) {
+            if (lockedFixedMode) {
+                clearServoFilterState()
+                return
+            }
+            val fallbackRevolute = toRevoluteJoint(currentJoint).copy(
+                maxForceTorque = computeJointMaxForceTorque(),
+                compliance = SERVO_COMPLIANCE,
+                driveVelocity = null,
+                driveForceLimit = null,
+                driveGearRatio = null,
+                driveFreeSpin = false
+            )
+            joint = fallbackRevolute
+            (physLevel as? VsiPhysLevel)?.updateJoint(jointId, fallbackRevolute)
+            clearServoFilterState()
+            return
+        }
+        val revolute = currentJoint as? VSRevoluteJoint ?: return
 
         // We need both transforms to compute angle; if ships aren't loaded yet, just wait.
         val subShip = revolute.shipId0?.let { physLevel.getShipById(it) } ?: run {
@@ -1750,6 +2146,16 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         } else {
             omegaActualForControl
         }
+        val tickSnapshot = PhysBearingFollowController.TickSnapshot(
+            currentAngleRad = currentAngleRad,
+            targetAngleRad = targetAngleRad,
+            omegaActualRadSec = omegaActual,
+            offAxisOmegaRadSec = offAxisOmegaLen,
+            relAnchorSpeedMps = relAnchorSpeed,
+            axisWorld = axisWorld.get(Vector3d()),
+            chainedDynamic = chainedDynamic,
+            gyroRisk = gyroRisk
+        )
 
         var omegaTarget = 0.0
         var omegaErr = 0.0
@@ -1768,42 +2174,35 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             } else {
                 0.0
             }
-            val followTrackPhase =
-                !followAngleStalled &&
-                    PhysBearingServoMath.isFollowCommandActive(abs(cmdOmegaRaw), FOLLOW_CMD_EPS_RAD_SEC)
-            val previousPhase = when {
-                followWasTrackLastTick -> PhysBearingServoMath.FollowPhase.TRACK
-                followBrakeHoldAngleRad != null -> PhysBearingServoMath.FollowPhase.BRAKE_HOLD
-                else -> PhysBearingServoMath.FollowPhase.BRAKE_DECEL
-            }
-            val phaseState = PhysBearingServoMath.stepFollowPhase(
-                trackActive = followTrackPhase,
-                omegaAbsRadSec = abs(omegaActual),
-                previous = PhysBearingServoMath.FollowPhaseState(
-                    phase = previousPhase,
-                    holdLatched = followBrakeHoldAngleRad != null,
+            val phaseResult = PhysBearingFollowController.evolvePhase(
+                PhysBearingFollowController.PhaseRequest(
+                    followAngleStalled = followAngleStalled,
+                    commandOmegaRadSec = cmdOmegaRaw,
+                    omegaActualRadSec = omegaActual,
+                    previousWasTrack = followWasTrackLastTick,
+                    holdLatchedAngle = followBrakeHoldAngleRad,
                     captureTicks = followHoldCaptureTicks,
-                    emergencyTicks = followHoldEmergencyReleaseTicks
-                ),
-                captureOmegaRadSec = FOLLOW_BRAKE_HOLD_CAPTURE_OMEGA_RAD_SEC,
-                captureTicksRequired = FOLLOW_HOLD_CAPTURE_TICKS,
-                emergencyReleaseOmegaRadSec = FOLLOW_HOLD_EMERGENCY_RELEASE_OMEGA_RAD_SEC,
-                emergencyReleaseTicksRequired = FOLLOW_HOLD_EMERGENCY_RELEASE_TICKS
+                    emergencyTicks = followHoldEmergencyReleaseTicks,
+                    captureOmegaRadSec = FOLLOW_BRAKE_HOLD_CAPTURE_OMEGA_RAD_SEC,
+                    captureTicksRequired = FOLLOW_HOLD_CAPTURE_TICKS,
+                    emergencyReleaseOmegaRadSec = FOLLOW_HOLD_EMERGENCY_RELEASE_OMEGA_RAD_SEC,
+                    emergencyReleaseTicksRequired = FOLLOW_HOLD_EMERGENCY_RELEASE_TICKS,
+                    commandActiveEpsilonRadSec = FOLLOW_CMD_EPS_RAD_SEC
+                )
             )
-            followControlPhase = phaseState.phase
-            followHoldPhase = phaseState.phase == PhysBearingServoMath.FollowPhase.BRAKE_HOLD
-            followHoldCaptureTicks = phaseState.captureTicks
-            followHoldEmergencyReleaseTicks = phaseState.emergencyTicks
-            followWasTrackLastTick = phaseState.phase == PhysBearingServoMath.FollowPhase.TRACK
-            enteredHoldFromDecel =
-                previousPhase == PhysBearingServoMath.FollowPhase.BRAKE_DECEL &&
-                    phaseState.phase == PhysBearingServoMath.FollowPhase.BRAKE_HOLD
+            followControlPhase = phaseResult.phase
+            followHoldPhase = phaseResult.holdPhase
+            followHoldCaptureTicks = phaseResult.captureTicks
+            followHoldEmergencyReleaseTicks = phaseResult.emergencyTicks
+            followWasTrackLastTick = phaseResult.trackPhase
+            enteredHoldFromDecel = phaseResult.enteredHoldFromDecel
 
             when (followControlPhase) {
                 PhysBearingServoMath.FollowPhase.TRACK -> {
                     followBrakeHoldAngleRad = null
                     followHoldRingDownTicks = 0
                     followHoldLastErrorSign = 0
+                    followHoldAcquireTicksRemaining = 0
                     followHoldSettleTicksRemaining = 0
                     omegaFfRaw = cmdOmegaRaw
                     omegaTarget = PhysBearingServoMath.computeTrackOmegaTarget(
@@ -1821,6 +2220,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                     followBrakeHoldAngleRad = null
                     followHoldRingDownTicks = 0
                     followHoldLastErrorSign = 0
+                    followHoldAcquireTicksRemaining = 0
                     followHoldSettleTicksRemaining = 0
                     targetAngle = normalizeAngleDeg0To720(Math.toDegrees(currentAngleRad))
                     val brakeAlphaFriction = PhysBearingServoMath.computeFrictionBrakeAlpha(
@@ -1846,6 +2246,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
 
                 PhysBearingServoMath.FollowPhase.BRAKE_HOLD -> {
                     if (enteredHoldFromDecel) {
+                        followHoldAcquireTicksRemaining = followHoldAcquireTicks.coerceAtLeast(0)
                         followHoldSettleTicksRemaining = followHoldPostBrakeSettleTicks.coerceAtLeast(0)
                     }
                     val holdAngle = (followBrakeHoldAngleRad ?: currentAngleRad).let {
@@ -1901,30 +2302,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 null -> Unit
             }
         } else {
-            followWasTrackLastTick = false
-            followBrakeHoldAngleRad = null
-            followHoldSettleTicksRemaining = 0
-            followHoldCaptureTicks = 0
-            followHoldEmergencyReleaseTicks = 0
-            followHoldRingDownTicks = 0
-            followHoldLastErrorSign = 0
-            followRestStableTicks = 0
-            followRestUltraStableTicks = 0
+            PhysBearingFollowController.clearModeRuntime(followState)
             followHoldErrorSignedForRest = 0.0
-            tickFollowRestStable = false
-            tickFollowRestUltraStable = false
-            followRigidRestTicks = 0
-            tickFollowRigidRest = false
-            followHingeMicroTicks = 0
-            tickFollowHingeMicroSuppressed = false
-            followSeatMicroTicks = 0
-            followTiltMicroTicks = 0
-            followSeatHoldBiasAccWorld = Vector3d()
-            followTiltHoldBiasAlphaWorld = Vector3d()
-            tickFollowSeatMicroSuppressed = false
-            tickFollowTiltMicroSuppressed = false
-            tickFollowSeatRestBandSatisfied = false
-            tickFollowTiltRestBandSatisfied = false
             // Close to hold, fade positional stiffness and let damping dominate.
             val posGainNow = servoPosGain * trackTorqueAuthority
             val omegaGainNow = servoOmegaGain * trackTorqueAuthority
@@ -1947,18 +2326,23 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         var followRestStableNow = false
         var rigidRestBlend = 0.0
         if (followMode && followHoldPhase) {
-            followAxisHoldProfile = PhysBearingServoMath.computeAxisHoldProfile(abs(axisWorld.y()), servoStrength01())
+            followAxisHoldProfile = PhysBearingStabilizerController.resolveAxisProfile(
+                followMode = followMode,
+                followHoldPhase = followHoldPhase,
+                absAxisY = abs(tickSnapshot.axisWorld.y()),
+                strength01 = servoStrength01()
+            )
             val restStableScale =
                 lerpClamped(1.0, FOLLOW_REST_STABLE_BAND_SCALE_MIN, servoStrength01()) * followAxisHoldProfile.restGateScale
-            val absOmegaHinge = abs(omegaActual)
+            val absOmegaHinge = abs(tickSnapshot.omegaActualRadSec)
             val enterRestStable =
                 followHoldErrorAbsForRest <= FOLLOW_REST_STABLE_HOLD_ERROR_ENTER_RAD * restStableScale &&
                     absOmegaHinge <= FOLLOW_REST_STABLE_HINGE_OMEGA_ENTER_RAD_SEC * restStableScale &&
-                    offAxisOmegaLen <= FOLLOW_REST_STABLE_OFFAXIS_OMEGA_ENTER_RAD_SEC * restStableScale
+                    tickSnapshot.offAxisOmegaRadSec <= FOLLOW_REST_STABLE_OFFAXIS_OMEGA_ENTER_RAD_SEC * restStableScale
             val exitRestStable =
                 followHoldErrorAbsForRest >= FOLLOW_REST_STABLE_HOLD_ERROR_EXIT_RAD * restStableScale ||
                     absOmegaHinge >= FOLLOW_REST_STABLE_HINGE_OMEGA_EXIT_RAD_SEC * restStableScale ||
-                    offAxisOmegaLen >= FOLLOW_REST_STABLE_OFFAXIS_OMEGA_EXIT_RAD_SEC * restStableScale
+                    tickSnapshot.offAxisOmegaRadSec >= FOLLOW_REST_STABLE_OFFAXIS_OMEGA_EXIT_RAD_SEC * restStableScale
             if (tickFollowRestStable) {
                 followRestStableNow = !exitRestStable
                 if (followRestStableNow) {
@@ -1975,12 +2359,22 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             followAxisHoldProfile = PhysBearingServoMath.AxisHoldProfile.IDENTITY
             followRestUltraStableTicks = 0
             tickFollowRestUltraStable = false
+            followUltraSleepTicks = 0
+            tickFollowUltraSleep = false
             followSeatHoldBiasAccWorld = Vector3d()
             followTiltHoldBiasAlphaWorld = Vector3d()
+            followSeatBiasFreezeTicks = 0
+            followTiltBiasFreezeTicks = 0
+            followPrevSeatBiasErrorWorld = Vector3d()
+            followPrevTiltBiasErrorWorld = Vector3d()
         }
         tickFollowRestStable = followRestStableNow
         if (followMode && followHoldPhase) {
             val biasZeroBandScale = followHoldRestBiasZeroBandScale.coerceAtLeast(0.01)
+            val seatBiasMag = followSeatHoldBiasAccWorld.length().let { if (it.isFinite()) it else Double.POSITIVE_INFINITY }
+            val tiltBiasMag = followTiltHoldBiasAlphaWorld.length().let { if (it.isFinite()) it else Double.POSITIVE_INFINITY }
+            val seatBiasBand = FOLLOW_REST_BIAS_ZERO_BAND_SEAT * biasZeroBandScale
+            val tiltBiasBand = FOLLOW_REST_BIAS_ZERO_BAND_TILT * biasZeroBandScale
             val ultraStableState = PhysBearingServoMath.allowRestEarlyReturn(
                 previouslyAllowed = tickFollowRestUltraStable,
                 previousTicks = followRestUltraStableTicks,
@@ -1988,17 +2382,32 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 tiltRestBand = tickFollowTiltRestBandSatisfied,
                 seatMicroBand = tickFollowSeatMicroSuppressed,
                 tiltMicroBand = tickFollowTiltMicroSuppressed,
-                seatBiasMagnitude = followSeatHoldBiasAccWorld.length().let { if (it.isFinite()) it else Double.POSITIVE_INFINITY },
-                tiltBiasMagnitude = followTiltHoldBiasAlphaWorld.length().let { if (it.isFinite()) it else Double.POSITIVE_INFINITY },
-                seatBiasZeroBand = FOLLOW_REST_BIAS_ZERO_BAND_SEAT * biasZeroBandScale,
-                tiltBiasZeroBand = FOLLOW_REST_BIAS_ZERO_BAND_TILT * biasZeroBandScale,
+                seatBiasMagnitude = seatBiasMag,
+                tiltBiasMagnitude = tiltBiasMag,
+                seatBiasZeroBand = seatBiasBand,
+                tiltBiasZeroBand = tiltBiasBand,
                 enterTicksRequired = FOLLOW_REST_ULTRA_STABLE_ENTER_TICKS
             )
             tickFollowRestUltraStable = ultraStableState.active
             followRestUltraStableTicks = ultraStableState.ticks
+            val ultraSleepState = PhysBearingServoMath.stepUltraSleep(
+                previouslyActive = tickFollowUltraSleep,
+                previousTicks = followUltraSleepTicks,
+                ultraStable = ultraStableState.active,
+                seatBiasMagnitude = seatBiasMag,
+                tiltBiasMagnitude = tiltBiasMag,
+                seatBiasZeroBand = seatBiasBand,
+                tiltBiasZeroBand = tiltBiasBand,
+                enterTicksRequired = FOLLOW_ULTRA_SLEEP_ENTER_TICKS,
+                exitMultiplier = FOLLOW_ULTRA_SLEEP_EXIT_BIAS_MULT
+            )
+            tickFollowUltraSleep = ultraSleepState.active
+            followUltraSleepTicks = ultraSleepState.ticks
         } else {
             tickFollowRestUltraStable = false
             followRestUltraStableTicks = 0
+            tickFollowUltraSleep = false
+            followUltraSleepTicks = 0
         }
         var followRigidRestNow = false
         rigidRestBlend = smoothStep(FOLLOW_RIGID_REST_BLEND_START, FOLLOW_RIGID_REST_BLEND_END, servoStrength01())
@@ -2060,13 +2469,13 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 followRestStableNow &&
                     followHoldErrorAbsForRest <= rigidEnterError &&
                     absOmegaHinge <= rigidEnterOmega &&
-                    offAxisOmegaLen <= rigidEnterOffAxisOmega &&
-                    relAnchorSpeed <= rigidEnterRelVel
+                    tickSnapshot.offAxisOmegaRadSec <= rigidEnterOffAxisOmega &&
+                    tickSnapshot.relAnchorSpeedMps <= rigidEnterRelVel
             val rigidExit =
                 followHoldErrorAbsForRest >= rigidExitError ||
                     absOmegaHinge >= rigidExitOmega ||
-                    offAxisOmegaLen >= rigidExitOffAxisOmega ||
-                    relAnchorSpeed >= rigidExitRelVel
+                    tickSnapshot.offAxisOmegaRadSec >= rigidExitOffAxisOmega ||
+                    tickSnapshot.relAnchorSpeedMps >= rigidExitRelVel
             val rigidState = PhysBearingServoMath.stepHysteresisLatch(
                 previouslyActive = tickFollowRigidRest,
                 previousTicks = followRigidRestTicks,
@@ -2086,11 +2495,36 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         tickFollowRigidRest = followRigidRestNow
         tickFollowRigidRestBlend = if (followRigidRestNow) rigidRestBlend else 0.0
 
+        val fixedHoldFloorsNow = PhysBearingStabilizerController.resolveFixedHoldFloors(
+            context = PhysBearingStabilizerController.HoldContext(
+                followMode = followMode,
+                followBrakePhase = tickFollowBrakePhase,
+                followHoldPhase = followHoldPhase,
+                followRestUltraStable = tickFollowRestUltraStable,
+                followUltraSleep = tickFollowUltraSleep,
+                followRigidRest = followRigidRestNow,
+                followRigidRestBlend = rigidRestBlend,
+                followHoldSettleActive = followHoldSettleTicksRemaining > 0,
+                followAcquireActive = followHoldAcquireTicksRemaining > 0 || followSpawnSettleTicksRemaining > 0
+            ),
+            request = PhysBearingStabilizerController.FloorRequest(
+                seatAuthorityFloorMapped = followFixedHoldSeatAuthorityFloor,
+                tiltAuthorityFloorMapped = followFixedHoldTiltAuthorityFloor,
+                seatKpFloorScaleMapped = followFixedHoldSeatKpFloorScale,
+                tiltStiffnessFloorMapped = followFixedHoldTiltStiffnessFloor,
+                offAxisDampingZetaMinMapped = followFixedOffAxisDampingZetaMin,
+                rigidBlend01 = rigidRestBlend
+            )
+        )
+
         holdStabilizerAuthority = max(
             holdStabilizerAuthority,
-            PhysBearingServoMath.holdRestAuthorityFloor(
-                servoStrength01(),
-                rigidBlend01 = if (followRigidRestNow) rigidRestBlend else 0.0
+            max(
+                PhysBearingServoMath.holdRestAuthorityFloor(
+                    servoStrength01(),
+                    rigidBlend01 = if (followRigidRestNow) rigidRestBlend else 0.0
+                ),
+                max(fixedHoldFloorsNow.seatAuthorityFloor, fixedHoldFloorsNow.tiltAuthorityFloor)
             )
         ).coerceIn(AUTH_MIN, 1.0)
 
@@ -2223,9 +2657,12 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                     1.0
                 )
                 holdStabilizerAuthority = max(
-                    PhysBearingServoMath.holdRestAuthorityFloor(
-                        servoStrength01(),
-                        rigidBlend01 = if (followRigidRestNow) rigidRestBlend else 0.0
+                    max(
+                        PhysBearingServoMath.holdRestAuthorityFloor(
+                            servoStrength01(),
+                            rigidBlend01 = if (followRigidRestNow) rigidRestBlend else 0.0
+                        ),
+                        max(fixedHoldFloorsNow.seatAuthorityFloor, fixedHoldFloorsNow.tiltAuthorityFloor)
                     ),
                     holdStabilizerAuthority * chainHoldStiffness
                 ).coerceIn(AUTH_MIN, 1.0)
@@ -2387,6 +2824,12 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         if (followMode && followHoldPhase && followHoldSettleTicksRemaining > 0) {
             followHoldSettleTicksRemaining--
         }
+        if (followMode && followHoldPhase && followHoldAcquireTicksRemaining > 0) {
+            followHoldAcquireTicksRemaining--
+        }
+        if (followSpawnSettleTicksRemaining > 0) {
+            followSpawnSettleTicksRemaining--
+        }
     }
 
     public override fun write(tag: CompoundTag, clientPacket: Boolean) {
@@ -2413,9 +2856,21 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
 
         val mapper = VSJacksonUtil.dtoMapper
-        // Avoid saving a potentially large/non-zero drive velocity from mid-servo movement.
-        val jointForSave = (joint as? VSRevoluteJoint)?.copy(driveVelocity = null) ?: joint
-        if (jointForSave is VSRevoluteJoint) {
+        // Keep saved schema revolute-compatible even if runtime LOCKED uses a fixed joint.
+        val jointForSave: VSRevoluteJoint? = when (val runtimeJoint = joint) {
+            is VSRevoluteJoint -> runtimeJoint.copy(driveVelocity = null)
+            is VSFixedJoint -> VSRevoluteJoint(
+                runtimeJoint.shipId0,
+                runtimeJoint.pose0,
+                runtimeJoint.shipId1,
+                runtimeJoint.pose1,
+                maxForceTorque = runtimeJoint.maxForceTorque,
+                compliance = SERVO_COMPLIANCE,
+                driveFreeSpin = true
+            )
+            else -> null
+        }
+        if (jointForSave != null) {
             tag.putByteArray("joint", mapper.writeValueAsBytes(jointForSave))
         }
 
@@ -2474,6 +2929,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             this.joint?.pose0?.pos?.get(Vector3d()) ?: Vector3d()
         )
 
+        followSpawnSettleTicksRemaining = max(followSpawnSettleTicksRemaining, followHoldSpawnSettleTicks.coerceAtLeast(0))
         tryMakeJoint()
     }
 
@@ -2513,7 +2969,11 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
 
         if (tag.contains("constraint")) {
             val temp = mapper.readValue(tag.getByteArray("constraint"), VSJointAndId::class.java)
-            joint = temp.joint as VSRevoluteJoint
+            joint = when (val loaded = temp.joint) {
+                is VSRevoluteJoint -> loaded
+                is VSFixedJoint -> toRevoluteJoint(loaded)
+                else -> null
+            }
             jointID = temp.jointId
         } else if (tag.contains("joint")) {
             joint = mapper.readValue(tag.getByteArray("joint"), VSRevoluteJoint::class.java).copy(driveVelocity = null)
@@ -2648,17 +3108,25 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             val existing = level.getJointById(jointID)
             if (existing != null) {
                 // If the stored jointId is still valid, prefer updating in-place over creating a second joint.
-                if (existing is VSRevoluteJoint && joint is VSRevoluteJoint &&
-                    existing.shipId0 == joint.shipId0 && existing.shipId1 == joint.shipId1
-                ) {
+                val sameKindAndEndpoints =
+                    (existing is VSRevoluteJoint && joint is VSRevoluteJoint &&
+                        existing.shipId0 == joint.shipId0 && existing.shipId1 == joint.shipId1) ||
+                        (existing is VSFixedJoint && joint is VSFixedJoint &&
+                            existing.shipId0 == joint.shipId0 && existing.shipId1 == joint.shipId1)
+                if (sameKindAndEndpoints) {
                     level.updateJoint(jointID, joint)
+                    followSpawnSettleTicksRemaining = max(followSpawnSettleTicksRemaining, followHoldSpawnSettleTicks.coerceAtLeast(0))
                     isRunning = true
                     return@physTickOnce
                 }
                 if (existing == joint) {
+                    followSpawnSettleTicksRemaining = max(followSpawnSettleTicksRemaining, followHoldSpawnSettleTicks.coerceAtLeast(0))
                     isRunning = true
                     return@physTickOnce
                 }
+                // Joint type or endpoint changed: replace the old id to avoid duplicate constraints.
+                level.removeJoint(jointID)
+                jointID = -1
             }
             val id = level.addJoint(joint)
             if (id == -1) {
@@ -2667,6 +3135,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             }
             this.jointID = id
 
+            followSpawnSettleTicksRemaining = max(followSpawnSettleTicksRemaining, followHoldSpawnSettleTicks.coerceAtLeast(0))
             isRunning = true
             lastStateChanged = ticks
         }
@@ -2880,17 +3349,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         lastAngle = 0f
         curAngle = 0f
 
-        physServoTickCounter = 0
-        tickFollowModeActive = false
-        tickFollowBrakePhase = false
-        tickFollowHoldPhase = false
-        tickFollowRestStable = false
-        tickFollowRigidRest = false
-        tickFollowRigidRestBlend = 0.0
-        followWasTrackLastTick = false
-        followBrakeHoldAngleRad = null
+        followState.resetAllRuntimeState()
         clearServoFilterState()
-        clearFollowAngleStallState()
     }
 
     private fun tryAssembleNextTick() {
@@ -2910,25 +3370,22 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             return
         }
 
-        // When entering a hold mode, capture the current physical angle to avoid any instantaneous jump.
-        if (lastMode != mode && (mode == LockedMode.FOLLOW_ANGLE || mode == LockedMode.LOCKED)) {
+        if (lastMode != mode && mode == LockedMode.FOLLOW_ANGLE) {
+            // Entering follow should remain jump-free: capture current physical angle.
             val shipOn = level!!.getShipObjectManagingPos(blockPos)?.transform
             val shiptraption = level!!.shipObjectWorld.allShips.getById(shiptraptionID)?.transform ?: return
             val currentRad = getAngle(bearingAxis, shiptraption, shipOn)
             targetAngle = Math.toDegrees(currentRad).toFloat()
-            lockedHoldAngleRad = if (mode == LockedMode.LOCKED) currentRad else null
+            lockedHoldAngleRad = null
+        } else if (lastMode != mode && mode == LockedMode.LOCKED) {
+            // Locked mode snaps to the configured target angle.
+            lockedHoldAngleRad = Math.toRadians(targetAngle.toDouble())
         } else if (lastMode == LockedMode.LOCKED && mode != LockedMode.LOCKED) {
             lockedHoldAngleRad = null
         }
         if (lastMode != mode || lastAligningState != aligningNow) {
             clearServoFilterState()
-            followBrakeHoldAngleRad = null
-            followWasTrackLastTick = false
-            tickFollowRestStable = false
-            tickFollowRigidRest = false
-            tickFollowRigidRestBlend = 0.0
-            tickFollowHingeMicroSuppressed = false
-            followHingeMicroTicks = 0
+            PhysBearingFollowController.clearModeRuntime(followState)
             clearFollowAngleStallState()
         }
 
@@ -3353,22 +3810,25 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         private const val FOLLOW_REST_STABLE_OFFAXIS_OMEGA_EXIT_RAD_SEC = 0.20
         private const val FOLLOW_REST_STABLE_BAND_SCALE_MIN = 0.55
         private const val FOLLOW_REST_ULTRA_STABLE_ENTER_TICKS = 8
+        private const val FOLLOW_ULTRA_SLEEP_ENTER_TICKS = 6
+        private const val FOLLOW_ULTRA_SLEEP_EXIT_BIAS_MULT = 1.8
         private const val FOLLOW_REST_BIAS_ZERO_BAND_SEAT = 0.10
         private const val FOLLOW_REST_BIAS_ZERO_BAND_TILT = 0.20
         private const val FOLLOW_HOLD_AUTH_MIN = 0.42
         private const val FOLLOW_HOLD_BIAS_ACTIVE_RATIO = 0.08
         private const val FOLLOW_HOLD_BIAS_CORRECTIVE_DOT_THRESHOLD = 0.01
+        private const val FOLLOW_HOLD_BIAS_ERROR_FLIP_DOT_THRESHOLD = 1.0e-4
         private const val FOLLOW_HOLD_HEAVY_LEVER_BLEND_START_M = 1.5
         private const val FOLLOW_HOLD_HEAVY_LEVER_BLEND_END_M = 8.0
         private const val FOLLOW_HOLD_HEAVY_SEAT_KP_SCALE_MIN = 0.62
-        private const val FOLLOW_HOLD_HEAVY_SEAT_KD_BOOST_MAX = 2.80
-        private const val FOLLOW_HOLD_HEAVY_SEAT_ACCEL_CAP_SCALE_MAX = 3.20
-        private const val FOLLOW_HOLD_HEAVY_SEAT_BIAS_CAP_SCALE_MAX = 3.00
+        private const val FOLLOW_HOLD_HEAVY_SEAT_KD_BOOST_MAX = 1.85
+        private const val FOLLOW_HOLD_HEAVY_SEAT_ACCEL_CAP_SCALE_MAX = 1.90
+        private const val FOLLOW_HOLD_HEAVY_SEAT_BIAS_CAP_SCALE_MAX = 1.90
         private const val FOLLOW_HOLD_HEAVY_TILT_KP_SCALE_MIN = 0.50
-        private const val FOLLOW_HOLD_HEAVY_TILT_KD_BOOST_MAX = 3.20
-        private const val FOLLOW_HOLD_HEAVY_TILT_ALPHA_CAP_SCALE_MAX = 2.80
-        private const val FOLLOW_HOLD_HEAVY_TILT_ALPHA_EQ_CAP_SCALE_MAX = 2.60
-        private const val FOLLOW_HOLD_HEAVY_TILT_BIAS_CAP_SCALE_MAX = 3.20
+        private const val FOLLOW_HOLD_HEAVY_TILT_KD_BOOST_MAX = 2.05
+        private const val FOLLOW_HOLD_HEAVY_TILT_ALPHA_CAP_SCALE_MAX = 1.85
+        private const val FOLLOW_HOLD_HEAVY_TILT_ALPHA_EQ_CAP_SCALE_MAX = 1.70
+        private const val FOLLOW_HOLD_HEAVY_TILT_BIAS_CAP_SCALE_MAX = 2.00
         private const val FOLLOW_HOLD_CHAIN_STIFFNESS_FLOOR = 0.45
         private const val FOLLOW_RIGID_REST_CHAIN_STIFFNESS_FLOOR = 0.72
         private const val FOLLOW_RIGID_REST_BLEND_START = 0.55
@@ -3412,6 +3872,13 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         private const val FOLLOW_HOLD_SEAT_KD_MULT = 1.35
         private const val FOLLOW_HOLD_TILT_KP_MULT = 1.20
         private const val FOLLOW_HOLD_TILT_KD_MULT = 1.35
+        private const val FOLLOW_HOLD_ULTRA_STABLE_SEAT_KP_SCALE = 0.55
+        private const val FOLLOW_HOLD_ULTRA_STABLE_SEAT_KD_BOOST = 1.20
+        private const val FOLLOW_HOLD_ULTRA_STABLE_SEAT_KP_FLOOR = 0.20
+        private const val FOLLOW_HOLD_ULTRA_STABLE_TILT_KP_SCALE = 0.52
+        private const val FOLLOW_HOLD_ULTRA_STABLE_TILT_KD_BOOST = 1.25
+        private const val FOLLOW_HOLD_ULTRA_STABLE_TILT_KP_FLOOR = 0.20
+        private const val FOLLOW_HOLD_ULTRA_STABLE_TILT_STIFFNESS_FLOOR = 0.18
         private const val FOLLOW_REST_STABLE_SEAT_ERROR_BAND_M = 0.003
         private const val FOLLOW_REST_STABLE_SEAT_VEL_BAND_MPS = 0.04
         private const val FOLLOW_HOLD_MICRO_SEAT_ENTER_TICKS = 3
@@ -3441,11 +3908,11 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         private const val FOLLOW_HOLD_SETTLE_SEAT_VEL_BLEND_START_MPS = 0.03
         private const val FOLLOW_HOLD_SETTLE_SEAT_VEL_BLEND_END_MPS = 0.30
         private const val FOLLOW_HOLD_SETTLE_SEAT_KP_SCALE_MIN = 0.75
-        private const val FOLLOW_HOLD_SETTLE_SEAT_KD_BOOST_MAX = 1.65
+        private const val FOLLOW_HOLD_SETTLE_SEAT_KD_BOOST_MAX = 1.35
         private const val FOLLOW_HOLD_SETTLE_TILT_OMEGA_BLEND_START_RAD_SEC = 0.04
         private const val FOLLOW_HOLD_SETTLE_TILT_OMEGA_BLEND_END_RAD_SEC = 0.40
         private const val FOLLOW_HOLD_SETTLE_TILT_KP_SCALE_MIN = 0.55
-        private const val FOLLOW_HOLD_SETTLE_TILT_KD_BOOST_MAX = 2.20
+        private const val FOLLOW_HOLD_SETTLE_TILT_KD_BOOST_MAX = 1.55
         private const val FOLLOW_HOLD_SETTLE_VERTICAL_FLOOR_SCALE_MIN = 0.45
         private const val FOLLOW_HOLD_SETTLE_FLOOR_OMEGA_BLEND_START_RAD_SEC = 0.05
         private const val FOLLOW_HOLD_SETTLE_FLOOR_OMEGA_BLEND_END_RAD_SEC = 0.60

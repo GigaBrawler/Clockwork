@@ -498,6 +498,103 @@ class PhysBearingServoMathTest {
             low.holdRestTiltStiffnessFloor <= mid.holdRestTiltStiffnessFloor &&
                 mid.holdRestTiltStiffnessFloor <= high.holdRestTiltStiffnessFloor
         )
+        assertTrue(
+            low.fixedHoldSeatAuthorityFloor <= mid.fixedHoldSeatAuthorityFloor &&
+                mid.fixedHoldSeatAuthorityFloor <= high.fixedHoldSeatAuthorityFloor
+        )
+        assertTrue(
+            low.fixedHoldTiltAuthorityFloor <= mid.fixedHoldTiltAuthorityFloor &&
+                mid.fixedHoldTiltAuthorityFloor <= high.fixedHoldTiltAuthorityFloor
+        )
+        assertTrue(
+            low.fixedHoldSeatKpFloorScale <= mid.fixedHoldSeatKpFloorScale &&
+                mid.fixedHoldSeatKpFloorScale <= high.fixedHoldSeatKpFloorScale
+        )
+        assertTrue(
+            low.fixedHoldTiltStiffnessFloor <= mid.fixedHoldTiltStiffnessFloor &&
+                mid.fixedHoldTiltStiffnessFloor <= high.fixedHoldTiltStiffnessFloor
+        )
+        assertTrue(
+            low.fixedOffAxisDampingZetaMin <= mid.fixedOffAxisDampingZetaMin &&
+                mid.fixedOffAxisDampingZetaMin <= high.fixedOffAxisDampingZetaMin
+        )
+    }
+
+    @Test
+    fun fixedLikeHoldFloorsMonotonicStrength() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(low.fixedHoldSeatAuthorityFloor <= mid.fixedHoldSeatAuthorityFloor)
+        assertTrue(mid.fixedHoldSeatAuthorityFloor <= high.fixedHoldSeatAuthorityFloor)
+        assertTrue(low.fixedHoldTiltAuthorityFloor <= mid.fixedHoldTiltAuthorityFloor)
+        assertTrue(mid.fixedHoldTiltAuthorityFloor <= high.fixedHoldTiltAuthorityFloor)
+        assertTrue(low.fixedHoldSeatKpFloorScale <= mid.fixedHoldSeatKpFloorScale)
+        assertTrue(mid.fixedHoldSeatKpFloorScale <= high.fixedHoldSeatKpFloorScale)
+        assertTrue(low.fixedHoldTiltStiffnessFloor <= mid.fixedHoldTiltStiffnessFloor)
+        assertTrue(mid.fixedHoldTiltStiffnessFloor <= high.fixedHoldTiltStiffnessFloor)
+        assertTrue(low.fixedOffAxisDampingZetaMin <= mid.fixedOffAxisDampingZetaMin)
+        assertTrue(mid.fixedOffAxisDampingZetaMin <= high.fixedOffAxisDampingZetaMin)
+    }
+
+    @Test
+    fun fixedLikeHoldNeverZeroSupportWhenInHold() {
+        val active = PhysBearingServoMath.computeHoldSupportMode(
+            inFollowHold = true,
+            ultraSleep = false,
+            restUltraStable = false,
+            settleActive = false,
+            acquireActive = false,
+            biasActive = true
+        )
+        assertFalse(active.allowNearZeroDropout)
+        assertTrue(active.dampingScale > 0.0)
+        assertTrue(active.stiffnessScale > 0.0)
+
+        val ultra = PhysBearingServoMath.computeHoldSupportMode(
+            inFollowHold = true,
+            ultraSleep = true,
+            restUltraStable = true,
+            settleActive = false,
+            acquireActive = false,
+            biasActive = false
+        )
+        assertFalse(ultra.allowNearZeroDropout)
+        assertTrue(ultra.dampingScale >= 1.0)
+        assertTrue(ultra.stiffnessScale > 0.0)
+    }
+
+    @Test
+    fun fixedHoldFloorProfileHelperFiniteBounded() {
+        val mapped = PhysBearingServoMath.mapFollowStrength(strength01 = 0.8, sliderScale = 1.0)
+        val floor = PhysBearingServoMath.applyFixedHoldFloorProfile(
+            seatAuthorityFloorMapped = mapped.fixedHoldSeatAuthorityFloor,
+            tiltAuthorityFloorMapped = mapped.fixedHoldTiltAuthorityFloor,
+            seatKpFloorScaleMapped = mapped.fixedHoldSeatKpFloorScale,
+            tiltStiffnessFloorMapped = mapped.fixedHoldTiltStiffnessFloor,
+            offAxisDampingZetaMinMapped = mapped.fixedOffAxisDampingZetaMin,
+            rigidBlend01 = 0.7
+        )
+        assertTrue(floor.seatAuthorityFloor.isFinite() && floor.seatAuthorityFloor in 0.0..1.0)
+        assertTrue(floor.tiltAuthorityFloor.isFinite() && floor.tiltAuthorityFloor in 0.0..1.0)
+        assertTrue(floor.seatKpFloorScale.isFinite() && floor.seatKpFloorScale in 0.0..1.0)
+        assertTrue(floor.tiltStiffnessFloor.isFinite() && floor.tiltStiffnessFloor in 0.0..1.0)
+        assertTrue(floor.offAxisDampingZetaMin.isFinite() && floor.offAxisDampingZetaMin >= 1.0)
+    }
+
+    @Test
+    fun offaxisKdFloorOverdampedStrengthMonotonic() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        val kp = 18.0
+        val kdMapped = 0.8
+        val kdLow = PhysBearingServoMath.kdWithFloor(kp, kdMapped, low.fixedOffAxisDampingZetaMin)
+        val kdMid = PhysBearingServoMath.kdWithFloor(kp, kdMapped, mid.fixedOffAxisDampingZetaMin)
+        val kdHigh = PhysBearingServoMath.kdWithFloor(kp, kdMapped, high.fixedOffAxisDampingZetaMin)
+        assertTrue(kdLow <= kdMid && kdMid <= kdHigh)
     }
 
     @Test
@@ -762,6 +859,77 @@ class PhysBearingServoMathTest {
     }
 
     @Test
+    fun biasBoundedSlewRateLimited() {
+        val dt = 1.0 / 20.0
+        val maxDeltaPerSec = 0.4
+        val maxDelta = maxDeltaPerSec * dt
+        val next = PhysBearingServoMath.stepLeakyVectorBiasBounded(
+            current = Vector3d(),
+            error = Vector3d(50.0, 0.0, 0.0),
+            dtSec = dt,
+            ki = 8.0,
+            leakPerSec = 1.0,
+            maxMagnitude = 10.0,
+            maxDeltaPerSec = maxDeltaPerSec,
+            leakBoost = 1.0,
+            freezeIntegrate = false
+        )
+        assertTrue(next.length() <= maxDelta + 1.0e-9)
+    }
+
+    @Test
+    fun biasFlipFreezeBlocksIntegrateAndLeaksDown() {
+        val dt = 1.0 / 20.0
+        val current = Vector3d(0.7, 0.0, 0.0)
+        val freezeStep = PhysBearingServoMath.stepLeakyVectorBiasBounded(
+            current = current,
+            error = Vector3d(-12.0, 0.0, 0.0),
+            dtSec = dt,
+            ki = 4.0,
+            leakPerSec = 1.5,
+            maxMagnitude = 2.0,
+            maxDeltaPerSec = 10.0,
+            leakBoost = 2.6,
+            freezeIntegrate = true
+        )
+        assertTrue(freezeStep.x in 0.0..0.7)
+
+        val integrateStep = PhysBearingServoMath.stepLeakyVectorBiasBounded(
+            current = current,
+            error = Vector3d(-12.0, 0.0, 0.0),
+            dtSec = dt,
+            ki = 4.0,
+            leakPerSec = 1.5,
+            maxMagnitude = 2.0,
+            maxDeltaPerSec = 10.0,
+            leakBoost = 1.0,
+            freezeIntegrate = false
+        )
+        assertTrue(integrateStep.x < freezeStep.x)
+    }
+
+    @Test
+    fun biasUpdateOverdampedNoFlipChatter() {
+        val dt = 1.0 / 20.0
+        var bias = Vector3d(0.5, 0.0, 0.0)
+        repeat(20) {
+            bias = PhysBearingServoMath.stepLeakyVectorBiasBounded(
+                current = bias,
+                error = Vector3d(-0.08, 0.0, 0.0),
+                dtSec = dt,
+                ki = 0.6,
+                leakPerSec = 3.0,
+                maxMagnitude = 1.5,
+                maxDeltaPerSec = 0.6,
+                leakBoost = 2.5,
+                freezeIntegrate = true
+            )
+            assertTrue(bias.x >= -1.0e-9)
+        }
+        assertTrue(bias.x < 0.5)
+    }
+
+    @Test
     fun restEarlyReturnRequiresBiasNearZero() {
         var state = PhysBearingServoMath.HysteresisLatchState(active = false, ticks = 0)
         repeat(10) {
@@ -815,6 +983,130 @@ class PhysBearingServoMathTest {
     }
 
     @Test
+    fun ultraSleepRequiresDualBandAndBiasZeroDwell() {
+        var state = PhysBearingServoMath.HysteresisLatchState(active = false, ticks = 0)
+        repeat(8) {
+            state = PhysBearingServoMath.stepUltraSleep(
+                previouslyActive = state.active,
+                previousTicks = state.ticks,
+                ultraStable = true,
+                seatBiasMagnitude = 0.22,
+                tiltBiasMagnitude = 0.18,
+                seatBiasZeroBand = 0.1,
+                tiltBiasZeroBand = 0.1,
+                enterTicksRequired = 4,
+                exitMultiplier = 1.8
+            )
+        }
+        assertFalse(state.active)
+
+        repeat(4) {
+            state = PhysBearingServoMath.stepUltraSleep(
+                previouslyActive = state.active,
+                previousTicks = state.ticks,
+                ultraStable = true,
+                seatBiasMagnitude = 0.03,
+                tiltBiasMagnitude = 0.02,
+                seatBiasZeroBand = 0.1,
+                tiltBiasZeroBand = 0.1,
+                enterTicksRequired = 4,
+                exitMultiplier = 1.8
+            )
+        }
+        assertTrue(state.active)
+    }
+
+    @Test
+    fun ultraSleepHysteresisNoToggleUnderNoise() {
+        var state = PhysBearingServoMath.HysteresisLatchState(active = false, ticks = 0)
+        repeat(4) {
+            state = PhysBearingServoMath.stepUltraSleep(
+                previouslyActive = state.active,
+                previousTicks = state.ticks,
+                ultraStable = true,
+                seatBiasMagnitude = 0.03,
+                tiltBiasMagnitude = 0.03,
+                seatBiasZeroBand = 0.1,
+                tiltBiasZeroBand = 0.1,
+                enterTicksRequired = 4,
+                exitMultiplier = 1.8
+            )
+        }
+        assertTrue(state.active)
+
+        val jitter = listOf(0.11, 0.16, 0.13, 0.15, 0.17)
+        for (seatBias in jitter) {
+            state = PhysBearingServoMath.stepUltraSleep(
+                previouslyActive = state.active,
+                previousTicks = state.ticks,
+                ultraStable = true,
+                seatBiasMagnitude = seatBias,
+                tiltBiasMagnitude = 0.12,
+                seatBiasZeroBand = 0.1,
+                tiltBiasZeroBand = 0.1,
+                enterTicksRequired = 4,
+                exitMultiplier = 1.8
+            )
+            assertTrue(state.active)
+        }
+
+        state = PhysBearingServoMath.stepUltraSleep(
+            previouslyActive = state.active,
+            previousTicks = state.ticks,
+            ultraStable = true,
+            seatBiasMagnitude = 0.19,
+            tiltBiasMagnitude = 0.12,
+            seatBiasZeroBand = 0.1,
+            tiltBiasZeroBand = 0.1,
+            enterTicksRequired = 4,
+            exitMultiplier = 1.8
+        )
+        assertFalse(state.active)
+    }
+
+    @Test
+    fun holdAcquireMappingMonotonic() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(low.holdAcquireTicks <= mid.holdAcquireTicks && mid.holdAcquireTicks <= high.holdAcquireTicks)
+        assertTrue(low.holdSpawnSettleTicks <= mid.holdSpawnSettleTicks && mid.holdSpawnSettleTicks <= high.holdSpawnSettleTicks)
+        assertTrue(low.holdAcquireKpScale >= mid.holdAcquireKpScale && mid.holdAcquireKpScale >= high.holdAcquireKpScale)
+        assertTrue(low.holdAcquireKdBoost <= mid.holdAcquireKdBoost && mid.holdAcquireKdBoost <= high.holdAcquireKdBoost)
+        assertTrue(low.holdAcquireTicks in 5..12)
+        assertTrue(mid.holdAcquireTicks in 5..12)
+        assertTrue(high.holdAcquireTicks in 5..12)
+        assertTrue(low.holdSpawnSettleTicks in 8..16)
+        assertTrue(mid.holdSpawnSettleTicks in 8..16)
+        assertTrue(high.holdSpawnSettleTicks in 8..16)
+        assertTrue(low.holdAcquireKpScale in 0.40..0.62)
+        assertTrue(mid.holdAcquireKpScale in 0.40..0.62)
+        assertTrue(high.holdAcquireKpScale in 0.40..0.62)
+        assertTrue(low.holdAcquireKdBoost in 1.30..2.00)
+        assertTrue(mid.holdAcquireKdBoost in 1.30..2.00)
+        assertTrue(high.holdAcquireKdBoost in 1.30..2.00)
+    }
+
+    @Test
+    fun settleMappingReducedAndMonotonic() {
+        val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
+        val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
+        val high = PhysBearingServoMath.mapFollowStrength(strength01 = 1.0, sliderScale = 1.0)
+
+        assertTrue(low.holdPostBrakeSettleTicks in 3..8)
+        assertTrue(mid.holdPostBrakeSettleTicks in 3..8)
+        assertTrue(high.holdPostBrakeSettleTicks in 3..8)
+        assertTrue(low.holdPostBrakeSettleTicks <= mid.holdPostBrakeSettleTicks)
+        assertTrue(mid.holdPostBrakeSettleTicks <= high.holdPostBrakeSettleTicks)
+        assertTrue(low.holdPostBrakeKdBoost in 1.10..1.55)
+        assertTrue(mid.holdPostBrakeKdBoost in 1.10..1.55)
+        assertTrue(high.holdPostBrakeKdBoost in 1.10..1.55)
+        assertTrue(low.holdPostBrakeKdBoost <= mid.holdPostBrakeKdBoost)
+        assertTrue(mid.holdPostBrakeKdBoost <= high.holdPostBrakeKdBoost)
+    }
+
+    @Test
     fun holdSettleDampingMonotonicWithStrength() {
         val low = PhysBearingServoMath.mapFollowStrength(strength01 = 0.0, sliderScale = 1.0)
         val mid = PhysBearingServoMath.mapFollowStrength(strength01 = 0.5, sliderScale = 1.0)
@@ -837,6 +1129,19 @@ class PhysBearingServoMathTest {
         assertTrue(low.holdTiltBiasMaxAlpha <= mid.holdTiltBiasMaxAlpha && mid.holdTiltBiasMaxAlpha <= high.holdTiltBiasMaxAlpha)
         assertTrue(low.holdSeatBiasLeak <= mid.holdSeatBiasLeak && mid.holdSeatBiasLeak <= high.holdSeatBiasLeak)
         assertTrue(low.holdTiltBiasLeak <= mid.holdTiltBiasLeak && mid.holdTiltBiasLeak <= high.holdTiltBiasLeak)
+        assertTrue(low.holdBiasFreezeTicks <= mid.holdBiasFreezeTicks && mid.holdBiasFreezeTicks <= high.holdBiasFreezeTicks)
+        assertTrue(
+            low.holdBiasLeakBoostOnFlip <= mid.holdBiasLeakBoostOnFlip &&
+                mid.holdBiasLeakBoostOnFlip <= high.holdBiasLeakBoostOnFlip
+        )
+        assertTrue(
+            low.holdSeatBiasSlewPerSec <= mid.holdSeatBiasSlewPerSec &&
+                mid.holdSeatBiasSlewPerSec <= high.holdSeatBiasSlewPerSec
+        )
+        assertTrue(
+            low.holdTiltBiasSlewPerSec <= mid.holdTiltBiasSlewPerSec &&
+                mid.holdTiltBiasSlewPerSec <= high.holdTiltBiasSlewPerSec
+        )
         assertTrue(low.holdRestBiasZeroBandScale >= mid.holdRestBiasZeroBandScale)
         assertTrue(mid.holdRestBiasZeroBandScale >= high.holdRestBiasZeroBandScale)
     }
@@ -851,9 +1156,22 @@ class PhysBearingServoMathTest {
             assertTrue(p.holdTiltBiasKi.isFinite() && p.holdTiltBiasKi >= 0.0)
             assertTrue(p.holdTiltBiasLeak.isFinite() && p.holdTiltBiasLeak > 0.0)
             assertTrue(p.holdTiltBiasMaxAlpha.isFinite() && p.holdTiltBiasMaxAlpha >= 0.0)
-            assertTrue(p.holdPostBrakeSettleTicks >= 1)
+            assertTrue(p.holdBiasFreezeTicks >= 0)
+            assertTrue(p.holdBiasLeakBoostOnFlip.isFinite() && p.holdBiasLeakBoostOnFlip >= 1.0)
+            assertTrue(p.holdSeatBiasSlewPerSec.isFinite() && p.holdSeatBiasSlewPerSec >= 0.0)
+            assertTrue(p.holdTiltBiasSlewPerSec.isFinite() && p.holdTiltBiasSlewPerSec >= 0.0)
+            assertTrue(p.holdAcquireTicks >= 0)
+            assertTrue(p.holdSpawnSettleTicks >= 0)
+            assertTrue(p.holdAcquireKpScale.isFinite() && p.holdAcquireKpScale in 0.0..1.0)
+            assertTrue(p.holdAcquireKdBoost.isFinite() && p.holdAcquireKdBoost >= 1.0)
+            assertTrue(p.holdPostBrakeSettleTicks in 3..8)
             assertTrue(p.holdPostBrakeKdBoost.isFinite() && p.holdPostBrakeKdBoost >= 1.0)
             assertTrue(p.holdRestBiasZeroBandScale.isFinite() && p.holdRestBiasZeroBandScale in 0.0..1.0)
+            assertTrue(p.fixedHoldSeatAuthorityFloor.isFinite() && p.fixedHoldSeatAuthorityFloor in 0.0..1.0)
+            assertTrue(p.fixedHoldTiltAuthorityFloor.isFinite() && p.fixedHoldTiltAuthorityFloor in 0.0..1.0)
+            assertTrue(p.fixedHoldSeatKpFloorScale.isFinite() && p.fixedHoldSeatKpFloorScale in 0.0..1.0)
+            assertTrue(p.fixedHoldTiltStiffnessFloor.isFinite() && p.fixedHoldTiltStiffnessFloor in 0.0..1.0)
+            assertTrue(p.fixedOffAxisDampingZetaMin.isFinite() && p.fixedOffAxisDampingZetaMin >= 1.0)
         }
     }
 
