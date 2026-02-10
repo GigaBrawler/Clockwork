@@ -8,9 +8,41 @@ import org.joml.Vector3dc
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.math.tanh
 
 internal object PhysBearingFollowController {
+    data class JerkLimitedStepState(
+        val stepRadPerTick: Double,
+        val accelRadPerTick2: Double
+    )
+
+    data class FixedAuthorityProfile(
+        val maxForce: Double,
+        val maxTorque: Double,
+        val movingTargetEpsRad: Double,
+        val movingDriftForceRad: Double,
+        val movingRefreshTicks: Int
+    )
+
+    private const val FOLLOW_MOVING_STEP_FULL_SCALE_RAD = 0.6
+    private const val FOLLOW_MOVING_ERROR_RAMP_FULL_RAD = 0.2
+    private const val FIXED_FORCE_HARD_MAX = 5.0e8
+    private const val FIXED_TORQUE_HARD_MAX = 5.0e8
+    private const val FOLLOW_MOVING_FORCE_MIN = 1.0e5
+    private const val FOLLOW_MOVING_FORCE_MAX = 2.5e7
+    private const val FOLLOW_MOVING_TORQUE_MIN = 1.0e5
+    private const val FOLLOW_MOVING_TORQUE_MAX = 3.0e7
+    private const val LOCKED_HOLD_FORCE_MAX = 2.0e8
+    private const val LOCKED_HOLD_TORQUE_MAX = 2.0e8
+    private const val DYNAMIC_MAIN_SUPPRESSION_FLOOR = 0.05
+    private const val MOVING_TARGET_EPS_BASE_RAD = 0.004
+    private const val MOVING_DRIFT_FORCE_BASE_RAD = 0.012
+    private const val MOVING_REFRESH_TICKS_BASE = 2
+    private const val PROFILE_MIN_CAP = 1.0e5
+
     fun isFixedJointMode(modeName: String, aligning: Boolean): Boolean {
         return aligning || modeName == "FOLLOW_ANGLE" || modeName == "LOCKED"
     }
@@ -77,6 +109,121 @@ internal object PhysBearingFollowController {
         val max = abs(maxStepRad).coerceAtLeast(min)
         val raw = if (commandedStepRad.isFinite() && gain.isFinite()) abs(commandedStepRad) * abs(gain) else min
         return raw.coerceIn(min, max)
+    }
+
+    fun stepJerkLimitedCommand(
+        currentStepRadPerTick: Double,
+        currentAccelRadPerTick2: Double,
+        commandedStepRadPerTick: Double,
+        maxAccelRadPerTick2: Double,
+        maxJerkRadPerTick3: Double,
+        maxAbsStepRadPerTick: Double
+    ): JerkLimitedStepState {
+        if (!currentStepRadPerTick.isFinite() || !currentAccelRadPerTick2.isFinite() || !commandedStepRadPerTick.isFinite()) {
+            return JerkLimitedStepState(0.0, 0.0)
+        }
+        val accelCap = abs(maxAccelRadPerTick2)
+        val jerkCap = abs(maxJerkRadPerTick3)
+        val stepCap = abs(maxAbsStepRadPerTick).coerceAtLeast(0.0)
+
+        val stepDelta = commandedStepRadPerTick - currentStepRadPerTick
+        val desiredAccel = stepDelta.coerceIn(-accelCap, accelCap)
+        val accelDelta = desiredAccel - currentAccelRadPerTick2
+        val nextAccel = (currentAccelRadPerTick2 + accelDelta.coerceIn(-jerkCap, jerkCap)).coerceIn(-accelCap, accelCap)
+        val nextStep = (currentStepRadPerTick + nextAccel).coerceIn(-stepCap, stepCap)
+        return JerkLimitedStepState(nextStep, nextAccel)
+    }
+
+    fun computePostLoadAuthorityRamp(
+        totalSettleTicks: Int,
+        settleTicksRemaining: Int,
+        minMultiplier: Double
+    ): Double {
+        if (totalSettleTicks <= 0) return 1.0
+        val min = minMultiplier.coerceIn(0.0, 1.0)
+        val remaining = settleTicksRemaining.coerceIn(0, totalSettleTicks)
+        val progress = 1.0 - (remaining.toDouble() / totalSettleTicks.toDouble())
+        return (min + (1.0 - min) * progress).coerceIn(min, 1.0)
+    }
+
+    fun computeFixedAuthorityProfile(
+        modeName: String,
+        aligning: Boolean,
+        movingFollow: Boolean,
+        inPostLoadSettle: Boolean,
+        subMass: Double?,
+        mainMass: Double?,
+        commandedStepMagnitudeRad: Double,
+        trackingErrorAbsRad: Double = 0.0,
+        postLoadAuthorityMultiplier: Double
+    ): FixedAuthorityProfile {
+        val lockedLikeHold = aligning || modeName == "LOCKED" || !movingFollow
+        val stepBlend = if (commandedStepMagnitudeRad.isFinite()) {
+            (abs(commandedStepMagnitudeRad) / FOLLOW_MOVING_STEP_FULL_SCALE_RAD).coerceIn(0.0, 1.0)
+        } else {
+            0.0
+        }
+        val errorBlend = if (trackingErrorAbsRad.isFinite()) {
+            (abs(trackingErrorAbsRad) / FOLLOW_MOVING_ERROR_RAMP_FULL_RAD).coerceIn(0.0, 1.0)
+        } else {
+            0.0
+        }
+        val errorRamp = 0.2 + 0.8 * tanh(errorBlend)
+
+        var forceCap = if (lockedLikeHold) {
+            LOCKED_HOLD_FORCE_MAX
+        } else {
+            FOLLOW_MOVING_FORCE_MIN + (FOLLOW_MOVING_FORCE_MAX - FOLLOW_MOVING_FORCE_MIN) * stepBlend
+        }
+        var torqueCap = if (lockedLikeHold) {
+            LOCKED_HOLD_TORQUE_MAX
+        } else {
+            FOLLOW_MOVING_TORQUE_MIN + (FOLLOW_MOVING_TORQUE_MAX - FOLLOW_MOVING_TORQUE_MIN) * stepBlend
+        }
+        if (!lockedLikeHold) {
+            forceCap = FOLLOW_MOVING_FORCE_MIN + (forceCap - FOLLOW_MOVING_FORCE_MIN) * errorRamp
+            torqueCap = FOLLOW_MOVING_TORQUE_MIN + (torqueCap - FOLLOW_MOVING_TORQUE_MIN) * errorRamp
+        }
+
+        var forceSuppressionScale = 1.0
+        var torqueSuppressionScale = 1.0
+        if (!lockedLikeHold && movingFollow) {
+            val sub = subMass?.takeIf { it.isFinite() && it > 0.0 }
+            val main = mainMass?.takeIf { it.isFinite() && it > 0.0 }
+            if (sub != null && main != null) {
+                val massRatioBlend = sqrt((sub / (sub + main)).coerceIn(0.0, 1.0))
+                forceSuppressionScale = massRatioBlend.coerceIn(DYNAMIC_MAIN_SUPPRESSION_FLOOR, 1.0)
+                torqueSuppressionScale = (0.35 + 0.65 * massRatioBlend).coerceIn(0.35, 1.0)
+                forceCap *= forceSuppressionScale
+                torqueCap *= torqueSuppressionScale
+            }
+        }
+
+        if (inPostLoadSettle) {
+            val ramp = postLoadAuthorityMultiplier.coerceIn(0.05, 1.0)
+            forceCap *= ramp
+            torqueCap *= ramp
+        }
+
+        forceCap = forceCap.coerceIn(PROFILE_MIN_CAP, FIXED_FORCE_HARD_MAX)
+        torqueCap = torqueCap.coerceIn(PROFILE_MIN_CAP, FIXED_TORQUE_HARD_MAX)
+
+        val epsScale = if (!lockedLikeHold && movingFollow) 1.0 / forceSuppressionScale.coerceAtLeast(DYNAMIC_MAIN_SUPPRESSION_FLOOR) else 1.0
+        val movingTargetEpsRad = (MOVING_TARGET_EPS_BASE_RAD * epsScale).coerceIn(MOVING_TARGET_EPS_BASE_RAD, 0.03)
+        val movingDriftForceRad = (MOVING_DRIFT_FORCE_BASE_RAD * epsScale).coerceIn(MOVING_DRIFT_FORCE_BASE_RAD, 0.05)
+        val movingRefreshTicks = if (!lockedLikeHold && movingFollow) {
+            (MOVING_REFRESH_TICKS_BASE * epsScale).roundToInt().coerceIn(MOVING_REFRESH_TICKS_BASE, 8)
+        } else {
+            MOVING_REFRESH_TICKS_BASE
+        }
+
+        return FixedAuthorityProfile(
+            maxForce = forceCap,
+            maxTorque = torqueCap,
+            movingTargetEpsRad = movingTargetEpsRad,
+            movingDriftForceRad = movingDriftForceRad,
+            movingRefreshTicks = movingRefreshTicks
+        )
     }
 
     fun enforceQuaternionHemisphere(candidate: Quaterniondc, reference: Quaterniondc): Quaterniond {
@@ -174,6 +321,9 @@ internal object PhysBearingFollowController {
     fun shouldApplyMovingFixedTargetUpdate(
         movingFollow: Boolean,
         inFollowSettleWindow: Boolean,
+        referenceContextValid: Boolean,
+        commandedStepRadPerTick: Double,
+        movingCommandActiveStepRad: Double,
         modeOrAlignmentTransition: Boolean,
         jointKindMismatch: Boolean,
         targetDeltaAbsRad: Double,
@@ -183,8 +333,7 @@ internal object PhysBearingFollowController {
         holdDriftDeadbandRad: Double,
         movingDriftForceRad: Double,
         ticksSinceLastRefresh: Int,
-        safetyRefreshTicks: Int,
-        movingRefreshTicks: Int
+        safetyRefreshTicks: Int
     ): Boolean {
         if (!movingFollow || inFollowSettleWindow) {
             return shouldApplyFixedTargetUpdate(
@@ -200,10 +349,8 @@ internal object PhysBearingFollowController {
         }
 
         if (modeOrAlignmentTransition || jointKindMismatch) return true
-        if (!targetDeltaAbsRad.isFinite() || !driftAbsRad.isFinite()) return true
-        if (targetDeltaAbsRad >= movingTargetEpsRad) return true
-        if (driftAbsRad > movingDriftForceRad) return true
-        if (ticksSinceLastRefresh >= movingRefreshTicks) return true
-        return false
+        if (!referenceContextValid) return false
+        if (!commandedStepRadPerTick.isFinite()) return true
+        return abs(commandedStepRadPerTick) >= abs(movingCommandActiveStepRad)
     }
 }

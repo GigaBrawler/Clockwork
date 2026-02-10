@@ -114,4 +114,107 @@ class PhysBearingJointModeTest {
         assertTrue(selected.isFinite())
         assertTrue(abs(selected - measured) < 1.0e-12)
     }
+
+    @Test
+    fun follow_moving_heavy_main_profile_lower_than_locked_hold() {
+        val followMoving = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val lockedHold = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "LOCKED",
+            aligning = false,
+            movingFollow = false,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.0,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(followMoving.maxForce < lockedHold.maxForce)
+        assertTrue(followMoving.maxTorque < lockedHold.maxTorque)
+    }
+
+    @Test
+    fun mass_ratio_suppression_monotonic() {
+        val lowRatio = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val midRatio = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 100_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val highRatio = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 2_000_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(lowRatio.maxForce <= midRatio.maxForce)
+        assertTrue(midRatio.maxForce <= highRatio.maxForce)
+        assertTrue(lowRatio.maxTorque <= midRatio.maxTorque)
+        assertTrue(midRatio.maxTorque <= highRatio.maxTorque)
+    }
+
+    @Test
+    fun dynamic_main_suppression_floor_applies() {
+        val extremeRatio = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 1_000.0,
+            mainMass = 10_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(extremeRatio.maxForce >= 1.0e5)
+        assertTrue(extremeRatio.maxTorque >= 1.0e5)
+    }
+
+    @Test
+    fun continuous_stream_avoids_quantized_target_jumps() {
+        assertTrue(
+            PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
+                movingFollow = true,
+                inFollowSettleWindow = false,
+                referenceContextValid = true,
+                commandedStepRadPerTick = 0.01,
+                movingCommandActiveStepRad = 5.0e-5,
+                modeOrAlignmentTransition = false,
+                jointKindMismatch = false,
+                targetDeltaAbsRad = 1.0e-8,
+                driftAbsRad = 1.0e-8,
+                targetEpsRad = 1.0e-3,
+                movingTargetEpsRad = 0.004,
+                holdDriftDeadbandRad = 1.0e-3,
+                movingDriftForceRad = 0.012,
+                ticksSinceLastRefresh = 1,
+                safetyRefreshTicks = 200
+            )
+        )
+    }
 }

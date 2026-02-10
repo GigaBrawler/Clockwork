@@ -156,6 +156,10 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     @Volatile private var lastAppliedJointKindFixed = false
     @Volatile private var lastSentFixedTargetRad: Double? = null
     @Volatile private var lastFixedRefreshTick: Int = -FIXED_TARGET_SAFETY_REFRESH_TICKS
+    @Volatile private var fixedTrackStepRadPerTick = 0.0
+    @Volatile private var fixedTrackStepAccelRadPerTick2 = 0.0
+    @Volatile private var fixedTrackStepInitialized = false
+    @Volatile private var fixedTrackLastMeasuredAngleRad: Double? = null
 
     private var controllerCreationData: PhysBearingData? = null
     private var controllerUpdateData: PhysBearingUpdateData? = null
@@ -289,6 +293,10 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         lastAppliedJointKindFixed = false
         lastSentFixedTargetRad = null
         lastFixedRefreshTick = -FIXED_TARGET_SAFETY_REFRESH_TICKS
+        fixedTrackStepRadPerTick = 0.0
+        fixedTrackStepAccelRadPerTick2 = 0.0
+        fixedTrackStepInitialized = false
+        fixedTrackLastMeasuredAngleRad = null
     }
 
     private fun Quaterniondc.isFiniteQuat(): Boolean {
@@ -299,8 +307,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         return x().isFinite() && y().isFinite() && z().isFinite()
     }
 
-    private fun toRevoluteJoint(joint: VSJoint): VSRevoluteJoint {
-        val maxForceTorque = computeJointMaxForceTorque()
+    private fun toRevoluteJoint(joint: VSJoint, maxForceTorque: VSJointMaxForceTorque = computeJointMaxForceTorque()): VSRevoluteJoint {
         return when (joint) {
             is VSRevoluteJoint -> joint.copy(
                 maxForceTorque = maxForceTorque,
@@ -326,9 +333,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     private fun materializeFixedTargetJoint(
         joint: VSJoint,
         targetAngleRad: Double,
-        level: ServerLevel
+        level: ServerLevel,
+        maxForceTorque: VSJointMaxForceTorque = computeJointMaxForceTorque()
     ): VSFixedJoint? {
-        val maxForceTorque = computeJointMaxForceTorque()
         val subId = joint.shipId0 ?: return null
         val subShip = level.shipObjectWorld.loadedShips.getById(subId)
             ?: return null
@@ -377,22 +384,26 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         )
     }
 
-    private fun updateDrive(forcedFixedTargetRad: Double? = null): Boolean {
+    private fun updateDrive(
+        forcedFixedTargetRad: Double? = null,
+        forcedAuthority: VSJointMaxForceTorque? = null
+    ): Boolean {
         val level = level as? ServerLevel ?: return false
         val existing = joint ?: return false
         val mode = movementMode?.get() ?: LockedMode.UNLOCKED
         val useFixed = shouldUseFixedJoint(mode, aligning)
+        val maxForceTorque = forcedAuthority ?: computeJointMaxForceTorque()
         val newJoint: VSJoint = if (useFixed) {
             if (!fixedReferenceCaptured || fixedZeroRelRotMainToSub == null) return false
             if (!fixedAnchorCaptured || fixedAnchorPose0Local == null || fixedAnchorPose1Local == null) return false
             val targetRad = forcedFixedTargetRad ?: activeFixedTargetRad ?: fixedTargetAngleRad(mode, aligning)
-            val fixed = materializeFixedTargetJoint(existing, targetRad, level) ?: return false
+            val fixed = materializeFixedTargetJoint(existing, targetRad, level, maxForceTorque) ?: return false
             lastSentFixedTargetRad = targetRad
             lastFixedRefreshTick = ticks
             fixed
         } else {
-            toRevoluteJoint(existing).copy(
-                maxForceTorque = computeJointMaxForceTorque(),
+            toRevoluteJoint(existing, maxForceTorque).copy(
+                maxForceTorque = maxForceTorque,
                 compliance = SERVO_COMPLIANCE,
                 driveVelocity = null,
                 driveForceLimit = null,
@@ -861,6 +872,10 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             }
             lastSentFixedTargetRad = null
             lastFixedRefreshTick = -FIXED_TARGET_SAFETY_REFRESH_TICKS
+            fixedTrackStepRadPerTick = 0.0
+            fixedTrackStepAccelRadPerTick2 = 0.0
+            fixedTrackStepInitialized = false
+            fixedTrackLastMeasuredAngleRad = null
             needsJointRematerialization = true
             tryUpdateData()
         } else {
@@ -992,6 +1007,10 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             }
             lastSentFixedTargetRad = null
             lastFixedRefreshTick = -FIXED_TARGET_SAFETY_REFRESH_TICKS
+            fixedTrackStepRadPerTick = 0.0
+            fixedTrackStepAccelRadPerTick2 = 0.0
+            fixedTrackStepInitialized = false
+            fixedTrackLastMeasuredAngleRad = null
         } else if (!fixedMode) {
             activeFixedTargetRad = null
             fixedZeroRelRotMainToSub = null
@@ -1006,9 +1025,14 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             fixedAcquireTicksRemaining = 0
             fixedPostLoadSettleTicksRemaining = 0
             lastSentFixedTargetRad = null
+            fixedTrackStepRadPerTick = 0.0
+            fixedTrackStepAccelRadPerTick2 = 0.0
+            fixedTrackStepInitialized = false
+            fixedTrackLastMeasuredAngleRad = null
         }
 
         var forcedFixedTargetRad: Double? = null
+        var forcedJointAuthority: VSJointMaxForceTorque? = null
         val shouldApplyDrive = if (fixedMode) {
             val desiredWrappedRad = fixedTargetAngleRad(mode, aligningNow)
             val measuredAngleRad = currentJointAngleRad(level)
@@ -1079,12 +1103,16 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 fixedDesiredTargetInitialized = true
 
                 val currentActiveTargetRad = activeFixedTargetRad ?: measuredTargetRad
-                val followTrackStepRad = PhysBearingFollowController.computeFollowTrackMaxStepRad(
-                    commandedStepRad = Math.toRadians(getActualAngularSpeed().toDouble()),
-                    minStepRad = FIXED_FOLLOW_TRACK_MIN_STEP_RAD,
-                    maxStepRad = FIXED_FOLLOW_TRACK_MAX_STEP_RAD,
-                    gain = FIXED_FOLLOW_TRACK_STEP_GAIN
-                )
+                val commandedStepRadPerTick = Math.toRadians(getActualAngularSpeed().toDouble())
+                val measuredStepRadPerTick = fixedTrackLastMeasuredAngleRad?.let { lastMeasured ->
+                    shortestAngleErrorRad(measuredTargetRad, lastMeasured)
+                }
+                val movingFollow = PhysBearingFollowController.shouldForceMovingFollowUpdate(
+                    mode.name,
+                    aligningNow,
+                    speedNow
+                ) && !inFollowSettleWindow
+
                 val steppedTargetRad = when {
                     mode == LockedMode.LOCKED || aligningNow -> {
                         PhysBearingFollowController.stepTowardAngleRad(
@@ -1094,21 +1122,78 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                         )
                     }
                     mode == LockedMode.FOLLOW_ANGLE -> {
-                        val maxStepRad = if (fixedAcquireTicksRemaining > 0) {
-                            FIXED_FOLLOW_ENTRY_MAX_STEP_RAD_PER_TICK
+                        var activeTargetRad = currentActiveTargetRad
+                        if (movingFollow) {
+                            if (!fixedTrackStepInitialized) {
+                                val bootstrapStep = (measuredStepRadPerTick ?: commandedStepRadPerTick)
+                                    .takeIf { it.isFinite() } ?: 0.0
+                                fixedTrackStepRadPerTick = bootstrapStep.coerceIn(
+                                    -FIXED_FOLLOW_TRACK_MAX_STEP_RAD,
+                                    FIXED_FOLLOW_TRACK_MAX_STEP_RAD
+                                )
+                                fixedTrackStepAccelRadPerTick2 = 0.0
+                                fixedTrackStepInitialized = true
+                            }
+                            val jerkState = PhysBearingFollowController.stepJerkLimitedCommand(
+                                currentStepRadPerTick = fixedTrackStepRadPerTick,
+                                currentAccelRadPerTick2 = fixedTrackStepAccelRadPerTick2,
+                                commandedStepRadPerTick = commandedStepRadPerTick,
+                                maxAccelRadPerTick2 = FIXED_TRACK_MAX_ACCEL_RAD_PER_TICK2,
+                                maxJerkRadPerTick3 = FIXED_TRACK_MAX_JERK_RAD_PER_TICK3,
+                                maxAbsStepRadPerTick = FIXED_FOLLOW_TRACK_MAX_STEP_RAD
+                            )
+                            var filteredStepRad = jerkState.stepRadPerTick
+                            if (fixedAcquireTicksRemaining > 0) {
+                                filteredStepRad = filteredStepRad.coerceIn(
+                                    -FIXED_FOLLOW_ENTRY_MAX_STEP_RAD_PER_TICK,
+                                    FIXED_FOLLOW_ENTRY_MAX_STEP_RAD_PER_TICK
+                                )
+                            }
+                            fixedTrackStepRadPerTick = filteredStepRad
+                            fixedTrackStepAccelRadPerTick2 = jerkState.accelRadPerTick2
+                            activeTargetRad += filteredStepRad
+
+                            val settleProgress = if (inFollowSettleWindow && FIXED_POST_LOAD_SETTLE_TICKS > 0) {
+                                1.0 - (
+                                    fixedPostLoadSettleTicksRemaining.toDouble() /
+                                        FIXED_POST_LOAD_SETTLE_TICKS.toDouble()
+                                    )
+                            } else {
+                                1.0
+                            }
+                            val catchupGain = if (inFollowSettleWindow && settleProgress < 0.7) {
+                                0.0
+                            } else {
+                                FIXED_TRACK_CATCHUP_GAIN
+                            }
+                            val catchupError = shortestAngleErrorRad(desiredTargetRad, activeTargetRad)
+                            val catchup = catchupError.coerceIn(
+                                -FIXED_TRACK_CATCHUP_MAX_RAD_PER_TICK,
+                                FIXED_TRACK_CATCHUP_MAX_RAD_PER_TICK
+                            )
+                            activeTargetRad += catchup * catchupGain
                         } else {
-                            followTrackStepRad
+                            if (!inFollowSettleWindow) {
+                                fixedTrackStepRadPerTick *= 0.5
+                                fixedTrackStepAccelRadPerTick2 *= 0.5
+                                if (abs(fixedTrackStepRadPerTick) < FIXED_MOVING_COMMAND_ACTIVE_STEP_RAD) {
+                                    fixedTrackStepRadPerTick = 0.0
+                                    fixedTrackStepAccelRadPerTick2 = 0.0
+                                }
+                            }
+                            activeTargetRad = PhysBearingFollowController.stepTowardAngleRad(
+                                currentActiveTargetRad,
+                                desiredTargetRad,
+                                FIXED_LOCK_MAX_STEP_RAD_PER_TICK
+                            )
                         }
-                        PhysBearingFollowController.stepTowardAngleRad(
-                            currentActiveTargetRad,
-                            desiredTargetRad,
-                            maxStepRad
-                        )
+                        activeTargetRad
                     }
                     else -> desiredTargetRad
                 }
                 activeFixedTargetRad = steppedTargetRad
                 forcedFixedTargetRad = steppedTargetRad
+                fixedTrackLastMeasuredAngleRad = measuredTargetRad
 
                 val targetDeltaAbsRad = if (lastSentFixedTargetRad == null) {
                     Double.POSITIVE_INFINITY
@@ -1119,31 +1204,62 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 val ticksSinceLastRefresh =
                     if (lastFixedRefreshTick < 0) Int.MAX_VALUE else (ticks - lastFixedRefreshTick)
 
+                val subMass = joint?.shipId0
+                    ?.let { level.shipObjectWorld.loadedShips.getById(it) }
+                    ?.inertiaData
+                    ?.mass
+                    ?.toDouble()
+                val mainMass = joint?.shipId1
+                    ?.let { level.shipObjectWorld.loadedShips.getById(it) }
+                    ?.inertiaData
+                    ?.mass
+                    ?.toDouble()
+                val postLoadAuthorityMultiplier = if (inFollowSettleWindow) {
+                    PhysBearingFollowController.computePostLoadAuthorityRamp(
+                        totalSettleTicks = FIXED_POST_LOAD_SETTLE_TICKS,
+                        settleTicksRemaining = fixedPostLoadSettleTicksRemaining,
+                        minMultiplier = FIXED_POST_LOAD_AUTHORITY_MIN_MULTIPLIER
+                    )
+                } else {
+                    1.0
+                }
+                val authorityProfile = PhysBearingFollowController.computeFixedAuthorityProfile(
+                    modeName = mode.name,
+                    aligning = aligningNow,
+                    movingFollow = movingFollow,
+                    inPostLoadSettle = inFollowSettleWindow,
+                    subMass = subMass,
+                    mainMass = mainMass,
+                    commandedStepMagnitudeRad = abs(commandedStepRadPerTick),
+                    trackingErrorAbsRad = abs(shortestAngleErrorRad(desiredTargetRad, measuredTargetRad)),
+                    postLoadAuthorityMultiplier = postLoadAuthorityMultiplier
+                )
+                forcedJointAuthority = VSJointMaxForceTorque(
+                    authorityProfile.maxForce.toFloat(),
+                    authorityProfile.maxTorque.toFloat()
+                )
+
                 if (fixedAcquireTicksRemaining > 0) fixedAcquireTicksRemaining--
                 if (inFollowSettleWindow && fixedPostLoadSettleTicksRemaining > 0) {
                     fixedPostLoadSettleTicksRemaining--
                 }
 
-                val movingFollow = PhysBearingFollowController.shouldForceMovingFollowUpdate(
-                    mode.name,
-                    aligningNow,
-                    speedNow
-                ) && !inFollowSettleWindow
-
                 PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
                     movingFollow = movingFollow,
                     inFollowSettleWindow = inFollowSettleWindow,
+                    referenceContextValid = true,
+                    commandedStepRadPerTick = commandedStepRadPerTick,
+                    movingCommandActiveStepRad = FIXED_MOVING_COMMAND_ACTIVE_STEP_RAD,
                     modeOrAlignmentTransition = modeOrAlignmentTransition,
                     jointKindMismatch = needsJointRematerialization || jointKindMismatch || !lastAppliedJointKindFixed,
                     targetDeltaAbsRad = targetDeltaAbsRad,
                     driftAbsRad = driftAbsRad,
                     targetEpsRad = FIXED_TARGET_UPDATE_EPS_RAD,
-                    movingTargetEpsRad = FIXED_MOVING_TARGET_EPS_RAD,
+                    movingTargetEpsRad = authorityProfile.movingTargetEpsRad,
                     holdDriftDeadbandRad = FIXED_HOLD_DRIFT_DEADBAND_RAD,
-                    movingDriftForceRad = FIXED_MOVING_DRIFT_FORCE_RAD,
+                    movingDriftForceRad = authorityProfile.movingDriftForceRad,
                     ticksSinceLastRefresh = ticksSinceLastRefresh,
-                    safetyRefreshTicks = FIXED_TARGET_SAFETY_REFRESH_TICKS,
-                    movingRefreshTicks = FIXED_MOVING_REFRESH_TICKS
+                    safetyRefreshTicks = FIXED_TARGET_SAFETY_REFRESH_TICKS
                 )
             }
         } else {
@@ -1155,7 +1271,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         lastAligningState = aligningNow
 
         if (!shouldApplyDriveResolved) return
-        if (!updateDrive(forcedFixedTargetRad)) {
+        if (!updateDrive(forcedFixedTargetRad, forcedJointAuthority)) {
             needsJointRematerialization = true
         }
     }
@@ -1322,8 +1438,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     companion object {
         const val NO_SHIPTRAPTION_ID: Long = -1
 
-        private const val SERVO_JOINT_FORCE_MAX = 1.0e10
-        private const val SERVO_JOINT_TORQUE_MAX = 1.0e10
+        private const val SERVO_JOINT_FORCE_MAX = 5.0e8
+        private const val SERVO_JOINT_TORQUE_MAX = 5.0e8
         private const val SERVO_JOINT_ANCHOR_OFFSET = 1.0
         private const val SERVO_COMPLIANCE = 1.0e-10
         private const val FIXED_ACQUIRE_TICKS = 12
@@ -1333,12 +1449,13 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         private const val FIXED_TARGET_UPDATE_EPS_RAD = 1.0e-3
         private const val FIXED_TARGET_SAFETY_REFRESH_TICKS = 200
         private const val FIXED_POST_LOAD_SETTLE_TICKS = 12
-        private const val FIXED_MOVING_TARGET_EPS_RAD = 0.004
-        private const val FIXED_MOVING_REFRESH_TICKS = 2
-        private const val FIXED_MOVING_DRIFT_FORCE_RAD = 0.012
-        private const val FIXED_FOLLOW_TRACK_MIN_STEP_RAD = 0.01
+        private const val FIXED_POST_LOAD_AUTHORITY_MIN_MULTIPLIER = 0.15
+        private const val FIXED_MOVING_COMMAND_ACTIVE_STEP_RAD = 5.0e-5
+        private const val FIXED_TRACK_MAX_ACCEL_RAD_PER_TICK2 = 0.08
+        private const val FIXED_TRACK_MAX_JERK_RAD_PER_TICK3 = 0.20
+        private const val FIXED_TRACK_CATCHUP_GAIN = 0.18
+        private const val FIXED_TRACK_CATCHUP_MAX_RAD_PER_TICK = 0.02
         private const val FIXED_FOLLOW_TRACK_MAX_STEP_RAD = 1.2
-        private const val FIXED_FOLLOW_TRACK_STEP_GAIN = 1.35
 
         //tolerance is in degrees
         @JvmStatic

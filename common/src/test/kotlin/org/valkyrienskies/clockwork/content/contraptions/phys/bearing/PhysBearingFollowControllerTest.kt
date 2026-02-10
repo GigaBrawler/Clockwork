@@ -240,11 +240,14 @@ class PhysBearingFollowControllerTest {
     }
 
     @Test
-    fun moving_update_scheduler_not_unconditional() {
-        assertFalse(
+    fun moving_scheduler_streams_when_command_active() {
+        assertTrue(
             PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
                 movingFollow = true,
                 inFollowSettleWindow = false,
+                referenceContextValid = true,
+                commandedStepRadPerTick = 1.0e-3,
+                movingCommandActiveStepRad = 5.0e-5,
                 modeOrAlignmentTransition = false,
                 jointKindMismatch = false,
                 targetDeltaAbsRad = 1.0e-4,
@@ -254,15 +257,40 @@ class PhysBearingFollowControllerTest {
                 holdDriftDeadbandRad = 1.0e-3,
                 movingDriftForceRad = 0.012,
                 ticksSinceLastRefresh = 1,
-                safetyRefreshTicks = 200,
-                movingRefreshTicks = 2
+                safetyRefreshTicks = 200
             )
         )
+    }
 
-        assertTrue(
+    @Test
+    fun moving_scheduler_no_pulse_when_not_moving() {
+        assertFalse(
             PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
                 movingFollow = true,
                 inFollowSettleWindow = false,
+                referenceContextValid = true,
+                commandedStepRadPerTick = 1.0e-6,
+                movingCommandActiveStepRad = 5.0e-5,
+                modeOrAlignmentTransition = false,
+                jointKindMismatch = false,
+                targetDeltaAbsRad = 1.0e-4,
+                driftAbsRad = 1.0e-4,
+                targetEpsRad = 1.0e-3,
+                movingTargetEpsRad = 0.004,
+                holdDriftDeadbandRad = 1.0e-3,
+                movingDriftForceRad = 0.012,
+                ticksSinceLastRefresh = 1,
+                safetyRefreshTicks = 200
+            )
+        )
+
+        assertFalse(
+            PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
+                movingFollow = true,
+                inFollowSettleWindow = false,
+                referenceContextValid = true,
+                commandedStepRadPerTick = 1.0e-6,
+                movingCommandActiveStepRad = 5.0e-5,
                 modeOrAlignmentTransition = false,
                 jointKindMismatch = false,
                 targetDeltaAbsRad = 1.0e-4,
@@ -272,8 +300,53 @@ class PhysBearingFollowControllerTest {
                 holdDriftDeadbandRad = 1.0e-3,
                 movingDriftForceRad = 0.012,
                 ticksSinceLastRefresh = 2,
-                safetyRefreshTicks = 200,
-                movingRefreshTicks = 2
+                safetyRefreshTicks = 200
+            )
+        )
+    }
+
+    @Test
+    fun moving_scheduler_still_forces_on_transition() {
+        assertTrue(
+            PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
+                movingFollow = true,
+                inFollowSettleWindow = false,
+                referenceContextValid = true,
+                commandedStepRadPerTick = 1.0e-6,
+                movingCommandActiveStepRad = 5.0e-5,
+                modeOrAlignmentTransition = true,
+                jointKindMismatch = false,
+                targetDeltaAbsRad = 1.0e-6,
+                driftAbsRad = 1.0e-4,
+                targetEpsRad = 1.0e-3,
+                movingTargetEpsRad = 0.004,
+                holdDriftDeadbandRad = 1.0e-3,
+                movingDriftForceRad = 0.012,
+                ticksSinceLastRefresh = 1,
+                safetyRefreshTicks = 200
+            )
+        )
+    }
+
+    @Test
+    fun moving_scheduler_still_forces_on_mismatch() {
+        assertTrue(
+            PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
+                movingFollow = true,
+                inFollowSettleWindow = false,
+                referenceContextValid = true,
+                commandedStepRadPerTick = 1.0e-6,
+                movingCommandActiveStepRad = 5.0e-5,
+                modeOrAlignmentTransition = false,
+                jointKindMismatch = true,
+                targetDeltaAbsRad = 1.0e-4,
+                driftAbsRad = 1.0e-4,
+                targetEpsRad = 1.0e-3,
+                movingTargetEpsRad = 0.004,
+                holdDriftDeadbandRad = 1.0e-3,
+                movingDriftForceRad = 0.012,
+                ticksSinceLastRefresh = 1,
+                safetyRefreshTicks = 200
             )
         )
     }
@@ -289,6 +362,158 @@ class PhysBearingFollowControllerTest {
             inFollowSettleWindow = true
         )
         assertTrue(abs(selected - measured) < 1.0e-12)
+    }
+
+    @Test
+    fun jerk_limited_step_monotonic_no_burst() {
+        var step = 0.0
+        var accel = 0.0
+        repeat(8) {
+            val state = PhysBearingFollowController.stepJerkLimitedCommand(
+                currentStepRadPerTick = step,
+                currentAccelRadPerTick2 = accel,
+                commandedStepRadPerTick = 0.4,
+                maxAccelRadPerTick2 = 0.08,
+                maxJerkRadPerTick3 = 0.20,
+                maxAbsStepRadPerTick = 1.2
+            )
+            assertTrue(state.stepRadPerTick >= step)
+            assertTrue(abs(state.stepRadPerTick - step) <= 0.08 + 1.0e-12)
+            step = state.stepRadPerTick
+            accel = state.accelRadPerTick2
+        }
+        assertTrue(step <= 0.4 + 1.0e-9)
+    }
+
+    @Test
+    fun dynamic_authority_profile_reduces_caps_for_heavy_main_dynamic() {
+        val profile = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(profile.maxForce in 1.0e5..2.5e7)
+        assertTrue(profile.maxTorque in 1.0e5..3.0e7)
+        assertTrue(profile.movingTargetEpsRad >= 0.004)
+        assertTrue(profile.movingDriftForceRad >= 0.012)
+    }
+
+    @Test
+    fun dynamic_authority_profile_world_mount_not_over_suppressed() {
+        val worldMounted = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = null,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val dynamicMain = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(worldMounted.maxForce >= dynamicMain.maxForce)
+        assertTrue(worldMounted.maxTorque >= dynamicMain.maxTorque)
+    }
+
+    @Test
+    fun authority_profile_force_torque_scales_with_mass_ratio() {
+        val lowRatio = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val highRatio = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 2_000_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(lowRatio.maxForce <= highRatio.maxForce)
+        assertTrue(lowRatio.maxTorque <= highRatio.maxTorque)
+    }
+
+    @Test
+    fun authority_profile_error_ramp_monotonic() {
+        val lowError = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 1_000_000.0,
+            mainMass = 1_000_000.0,
+            commandedStepMagnitudeRad = 0.2,
+            trackingErrorAbsRad = 0.001,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val highError = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 1_000_000.0,
+            mainMass = 1_000_000.0,
+            commandedStepMagnitudeRad = 0.2,
+            trackingErrorAbsRad = 0.3,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(lowError.maxForce <= highError.maxForce)
+        assertTrue(lowError.maxTorque <= highError.maxTorque)
+    }
+
+    @Test
+    fun post_load_authority_ramp_is_monotonic_and_bounded() {
+        val total = 12
+        val min = 0.25
+        val early = PhysBearingFollowController.computePostLoadAuthorityRamp(total, 12, min)
+        val mid = PhysBearingFollowController.computePostLoadAuthorityRamp(total, 6, min)
+        val late = PhysBearingFollowController.computePostLoadAuthorityRamp(total, 0, min)
+        assertTrue(early in min..1.0)
+        assertTrue(mid in min..1.0)
+        assertTrue(late in min..1.0)
+        assertTrue(early <= mid)
+        assertTrue(mid <= late)
+    }
+
+    @Test
+    fun authority_profile_outputs_finite_values() {
+        val profile = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "LOCKED",
+            aligning = false,
+            movingFollow = false,
+            inPostLoadSettle = true,
+            subMass = 1.0,
+            mainMass = 1.0,
+            commandedStepMagnitudeRad = 0.0,
+            postLoadAuthorityMultiplier = 0.4
+        )
+        assertTrue(profile.maxForce.isFinite())
+        assertTrue(profile.maxTorque.isFinite())
+        assertTrue(profile.movingTargetEpsRad.isFinite())
+        assertTrue(profile.movingDriftForceRad.isFinite())
+        assertTrue(profile.movingRefreshTicks >= 1)
     }
 
     @Test
