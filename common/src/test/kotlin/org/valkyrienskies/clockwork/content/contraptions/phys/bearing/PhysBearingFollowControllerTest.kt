@@ -64,6 +64,41 @@ class PhysBearingFollowControllerTest {
     }
 
     @Test
+    fun desired_unwrap_uses_previous_desired_not_active() {
+        val previousDesired = 4.0 * Math.PI + 0.02
+        val laggedActive = 2.0 * Math.PI + 0.2
+        val wrappedTarget = 0.03
+
+        val desiredFromPrevious = PhysBearingFollowController.selectDesiredContinuousTarget(
+            wrappedTargetRad = wrappedTarget,
+            measuredAngleRad = laggedActive,
+            previousDesiredContinuousRad = previousDesired,
+            inFollowSettleWindow = false
+        )
+        val desiredFromActive = PhysBearingFollowController.unwrapAngleNearReferenceRad(laggedActive, wrappedTarget)
+
+        assertTrue(abs(desiredFromPrevious - previousDesired) < 0.05)
+        assertTrue(abs(desiredFromPrevious - desiredFromActive) > Math.PI)
+    }
+
+    @Test
+    fun desired_unwrap_no_branch_flip_under_active_lag() {
+        val previousDesired = 6.0 * Math.PI - 0.01
+        val laggedActive = 4.0 * Math.PI + 1.2
+        val wrappedTarget = 0.01
+
+        val desired = PhysBearingFollowController.selectDesiredContinuousTarget(
+            wrappedTargetRad = wrappedTarget,
+            measuredAngleRad = laggedActive,
+            previousDesiredContinuousRad = previousDesired,
+            inFollowSettleWindow = false
+        )
+
+        assertTrue(desired > previousDesired)
+        assertTrue(abs(desired - previousDesired) < 0.05)
+    }
+
+    @Test
     fun stepTowardDoesNotSnapToWrappedEquivalent() {
         val current = 2.0 * Math.PI - 0.01
         val wrappedTarget = 0.0
@@ -74,6 +109,24 @@ class PhysBearingFollowControllerTest {
         )
         assertTrue(step > Math.PI)
         assertTrue(abs(PhysBearingFollowController.normalizeAngleErrorRad(wrappedTarget, step)) < 0.02)
+    }
+
+    @Test
+    fun follow_step_bounded_but_continuous() {
+        val commandedStep = Math.toRadians(12.0)
+        val maxStep = PhysBearingFollowController.computeFollowTrackMaxStepRad(
+            commandedStepRad = commandedStep,
+            minStepRad = 0.01,
+            maxStepRad = 1.2,
+            gain = 1.35
+        )
+        assertTrue(maxStep in 0.01..1.2)
+
+        val current = 3.0 * Math.PI
+        val target = current + 0.15
+        val stepped = PhysBearingFollowController.stepTowardAngleRad(current, target, maxStep)
+        val applied = abs(PhysBearingFollowController.normalizeAngleErrorRad(stepped, current))
+        assertTrue(applied <= maxStep + 1.0e-12)
     }
 
     @Test
@@ -184,6 +237,58 @@ class PhysBearingFollowControllerTest {
                 safetyRefreshTicks = 200
             )
         )
+    }
+
+    @Test
+    fun moving_update_scheduler_not_unconditional() {
+        assertFalse(
+            PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
+                movingFollow = true,
+                inFollowSettleWindow = false,
+                modeOrAlignmentTransition = false,
+                jointKindMismatch = false,
+                targetDeltaAbsRad = 1.0e-4,
+                driftAbsRad = 1.0e-4,
+                targetEpsRad = 1.0e-3,
+                movingTargetEpsRad = 0.004,
+                holdDriftDeadbandRad = 1.0e-3,
+                movingDriftForceRad = 0.012,
+                ticksSinceLastRefresh = 1,
+                safetyRefreshTicks = 200,
+                movingRefreshTicks = 2
+            )
+        )
+
+        assertTrue(
+            PhysBearingFollowController.shouldApplyMovingFixedTargetUpdate(
+                movingFollow = true,
+                inFollowSettleWindow = false,
+                modeOrAlignmentTransition = false,
+                jointKindMismatch = false,
+                targetDeltaAbsRad = 1.0e-4,
+                driftAbsRad = 1.0e-4,
+                targetEpsRad = 1.0e-3,
+                movingTargetEpsRad = 0.004,
+                holdDriftDeadbandRad = 1.0e-3,
+                movingDriftForceRad = 0.012,
+                ticksSinceLastRefresh = 2,
+                safetyRefreshTicks = 200,
+                movingRefreshTicks = 2
+            )
+        )
+    }
+
+    @Test
+    fun post_load_settle_holds_to_measured_before_tracking() {
+        val measured = 2.4
+        val desiredWrapped = 5.9
+        val selected = PhysBearingFollowController.selectDesiredContinuousTarget(
+            wrappedTargetRad = desiredWrapped,
+            measuredAngleRad = measured,
+            previousDesiredContinuousRad = 11.8,
+            inFollowSettleWindow = true
+        )
+        assertTrue(abs(selected - measured) < 1.0e-12)
     }
 
     @Test

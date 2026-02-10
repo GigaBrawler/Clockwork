@@ -37,6 +37,17 @@ internal object PhysBearingFollowController {
         return referenceUnwrappedRad + error
     }
 
+    fun selectDesiredContinuousTarget(
+        wrappedTargetRad: Double,
+        measuredAngleRad: Double,
+        previousDesiredContinuousRad: Double?,
+        inFollowSettleWindow: Boolean
+    ): Double {
+        if (inFollowSettleWindow && measuredAngleRad.isFinite()) return measuredAngleRad
+        val unwrapRef = previousDesiredContinuousRad ?: measuredAngleRad
+        return unwrapAngleNearReferenceRad(unwrapRef, wrappedTargetRad)
+    }
+
     fun normalizedSnapDeltaRad(targetAngleRad: Double, currentAngleRad: Double): Double {
         return normalizeAngleErrorRad(targetAngleRad, currentAngleRad)
     }
@@ -54,6 +65,18 @@ internal object PhysBearingFollowController {
         if (!error.isFinite()) return currentAngleRad
         if (abs(error) <= stepLimit) return currentAngleRad + error
         return currentAngleRad + error.coerceIn(-stepLimit, stepLimit)
+    }
+
+    fun computeFollowTrackMaxStepRad(
+        commandedStepRad: Double,
+        minStepRad: Double,
+        maxStepRad: Double,
+        gain: Double
+    ): Double {
+        val min = abs(minStepRad)
+        val max = abs(maxStepRad).coerceAtLeast(min)
+        val raw = if (commandedStepRad.isFinite() && gain.isFinite()) abs(commandedStepRad) * abs(gain) else min
+        return raw.coerceIn(min, max)
     }
 
     fun enforceQuaternionHemisphere(candidate: Quaterniondc, reference: Quaterniondc): Quaterniond {
@@ -145,6 +168,42 @@ internal object PhysBearingFollowController {
 
         // Safety refresh must not pulse at rest: require measurable drift to re-apply.
         if (ticksSinceLastRefresh >= safetyRefreshTicks && driftAbsRad > holdDriftDeadbandRad) return true
+        return false
+    }
+
+    fun shouldApplyMovingFixedTargetUpdate(
+        movingFollow: Boolean,
+        inFollowSettleWindow: Boolean,
+        modeOrAlignmentTransition: Boolean,
+        jointKindMismatch: Boolean,
+        targetDeltaAbsRad: Double,
+        driftAbsRad: Double,
+        targetEpsRad: Double,
+        movingTargetEpsRad: Double,
+        holdDriftDeadbandRad: Double,
+        movingDriftForceRad: Double,
+        ticksSinceLastRefresh: Int,
+        safetyRefreshTicks: Int,
+        movingRefreshTicks: Int
+    ): Boolean {
+        if (!movingFollow || inFollowSettleWindow) {
+            return shouldApplyFixedTargetUpdate(
+                modeOrAlignmentTransition = modeOrAlignmentTransition,
+                jointKindMismatch = jointKindMismatch,
+                targetDeltaAbsRad = targetDeltaAbsRad,
+                driftAbsRad = driftAbsRad,
+                targetEpsRad = targetEpsRad,
+                holdDriftDeadbandRad = holdDriftDeadbandRad,
+                ticksSinceLastRefresh = ticksSinceLastRefresh,
+                safetyRefreshTicks = safetyRefreshTicks
+            )
+        }
+
+        if (modeOrAlignmentTransition || jointKindMismatch) return true
+        if (!targetDeltaAbsRad.isFinite() || !driftAbsRad.isFinite()) return true
+        if (targetDeltaAbsRad >= movingTargetEpsRad) return true
+        if (driftAbsRad > movingDriftForceRad) return true
+        if (ticksSinceLastRefresh >= movingRefreshTicks) return true
         return false
     }
 }

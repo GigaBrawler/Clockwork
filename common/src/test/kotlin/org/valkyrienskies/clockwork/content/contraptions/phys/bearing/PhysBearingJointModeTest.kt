@@ -83,4 +83,35 @@ class PhysBearingJointModeTest {
         assertTrue(delta.isFinite())
         assertTrue(delta <= 0.02)
     }
+
+    @Test
+    fun wrap_crossing_with_lagged_active_remains_small_and_finite() {
+        val previousDesired = 8.0 * PI - 0.01
+        val laggedMeasured = 6.0 * PI + 0.9
+        val wrappedTarget = 0.01
+        val desired = PhysBearingFollowController.selectDesiredContinuousTarget(
+            wrappedTargetRad = wrappedTarget,
+            measuredAngleRad = laggedMeasured,
+            previousDesiredContinuousRad = previousDesired,
+            inFollowSettleWindow = false
+        )
+        val delta = abs(PhysBearingFollowController.normalizeAngleErrorRad(desired, previousDesired))
+        assertTrue(desired.isFinite())
+        assertTrue(delta.isFinite())
+        assertTrue(delta < 0.05)
+    }
+
+    @Test
+    fun reload_settle_prevents_immediate_large_target_jump() {
+        val measured = 5.2
+        val wrappedTarget = 0.1
+        val selected = PhysBearingFollowController.selectDesiredContinuousTarget(
+            wrappedTargetRad = wrappedTarget,
+            measuredAngleRad = measured,
+            previousDesiredContinuousRad = 12.5,
+            inFollowSettleWindow = true
+        )
+        assertTrue(selected.isFinite())
+        assertTrue(abs(selected - measured) < 1.0e-12)
+    }
 }
