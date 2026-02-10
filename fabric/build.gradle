@@ -89,6 +89,8 @@ dependencies {
     // Create - dependencies are added transitively
     modImplementation("com.simibubi.create:create-fabric-${minecraft_version}:${create_fabric_version}") {
         exclude group: 'com.github.AlphaMode', module: 'fakeconfigtoml'
+        // Create already brings full Flywheel; exclude API jar to prevent duplicate classes.
+        exclude group: 'dev.engine-room.flywheel', module: "flywheel-fabric-api-${minecraft_version}"
         exclude group: "me.jellysquid"
         exclude module: "sodium"
     }

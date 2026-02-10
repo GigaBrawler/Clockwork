@@ -30,8 +30,11 @@ dependencies {
 
     modApi("dev.architectury:architectury:${rootProject.architectury_version}")
 
-    modCompileOnly("com.simibubi.create:create-fabric-${minecraft_version}:${create_fabric_version}")
-            { exclude group: 'com.github.AlphaMode', module: 'fakeconfigtoml' }
+    modCompileOnly("com.simibubi.create:create-fabric-${minecraft_version}:${create_fabric_version}") {
+        exclude group: 'com.github.AlphaMode', module: 'fakeconfigtoml'
+        // Keep full Flywheel on the classpath, but drop the separate API jar to avoid duplicate classes.
+        exclude group: 'dev.engine-room.flywheel', module: "flywheel-fabric-api-${minecraft_version}"
+    }
 
     modCompileOnly("net.fabricmc.fabric-api:fabric-api:${fabric_api_version}")
 
