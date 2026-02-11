@@ -164,21 +164,37 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         behaviours.add(movementMode!!)
     }
 
+    private fun isLockedBehavior(mode: LockedMode = movementMode?.get() ?: LockedMode.UNLOCKED): Boolean {
+        return mode == LockedMode.FOLLOW_ANGLE || mode == LockedMode.LOCKED
+    }
+
     private fun updateDrive(driveVelocity: VSRevoluteJoint.VSRevoluteDriveVelocity? = null) {
-        if (movementMode!!.get() == LockedMode.FOLLOW_ANGLE || aligning) {
+        val lockedBehavior = isLockedBehavior() || aligning
+        if (lockedBehavior) {
             joint = VSFixedJoint(joint!!.shipId0, joint!!.pose0, joint!!.shipId1, joint!!.pose1, compliance = 1e-100)
             controllerUpdateData = PhysBearingUpdateData(
                 Math.toRadians(targetAngle.toDouble()),
                 0f,
-                false
+                true
             )
         } else {
-            joint = VSRevoluteJoint(joint!!.shipId0, joint!!.pose0, joint!!.shipId1, joint!!.pose1, compliance = 1e-100, driveFreeSpin = true)
+            joint = VSRevoluteJoint(
+                joint!!.shipId0,
+                joint!!.pose0,
+                joint!!.shipId1,
+                joint!!.pose1,
+                compliance = 1e-100,
+                driveFreeSpin = true,
+                driveVelocity = driveVelocity
+            )
             controllerUpdateData = PhysBearingUpdateData(
                 Math.toRadians(targetAngle.toDouble()),
                 getRealisticAngularSpeed(),
                 false
             )
+        }
+
+        if (jointID != -1 && level is ServerLevel) {
             (level as ServerLevel).gtpa.updateJoint(jointID, joint!!)
         }
     }
@@ -295,7 +311,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             bearingAxis.get(Vector3d()),
             Math.toRadians(targetAngle.toDouble()),
             getRealisticAngularSpeed(),
-            movementMode!!.get() == LockedMode.FOLLOW_ANGLE,
+            isLockedBehavior(),
             aligning,
             mainId ?: -1L,
             this.joint?.pose1?.pos?.get(Vector3d()) ?: Vector3d(),
@@ -576,7 +592,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             bearingAxis.get(Vector3d()),
             Math.toRadians(targetAngle.toDouble()),
             getRealisticAngularSpeed(),
-            movementMode!!.get() == LockedMode.FOLLOW_ANGLE,
+            isLockedBehavior(),
             aligning,
             shipOnID ?: -1L,
             joint!!.pose1.pos.get(Vector3d()),
@@ -687,11 +703,12 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
 
     private fun tryUpdateData() {
         if (shiptraptionID == NO_SHIPTRAPTION_ID) {return}
-        if (   (lastSpeed == getSpeed() && lastMode == movementMode?.get())
-            && (movementMode!!.get() != LockedMode.FOLLOW_ANGLE && !aligning)
+        val mode = movementMode!!.get()
+        if (   (lastSpeed == getSpeed() && lastMode == mode)
+            && (!isLockedBehavior(mode) && !aligning)
         ) {return}
 
-        if (lastMode != movementMode?.get() && movementMode?.get() == LockedMode.FOLLOW_ANGLE) {
+        if (lastMode != mode && isLockedBehavior(mode)) {
             val shipOn = level!!.getShipObjectManagingPos(blockPos)?.transform
             val shiptraption = level!!.shipObjectWorld.allShips.getById(shiptraptionID)?.transform ?: return
 
@@ -699,7 +716,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
 
         lastSpeed = getSpeed()
-        lastMode = movementMode!!.get()
+        lastMode = mode
 
         val realSpeed = if (abs(getSpeed()) > 0.0f) getRealisticAngularSpeed() else 0.0f
         val newDriveVelocity = if (realSpeed != 0.0f) VSRevoluteJoint.VSRevoluteDriveVelocity(getRealisticAngularSpeed(), true) else null

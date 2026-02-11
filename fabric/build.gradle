@@ -91,6 +91,8 @@ dependencies {
         exclude group: 'com.github.AlphaMode', module: 'fakeconfigtoml'
         exclude group: "me.jellysquid"
         exclude module: "sodium"
+        // Prevent duplicate class remapping with flywheel-fabric.
+        exclude group: "dev.engine-room.flywheel", module: "flywheel-fabric-api-${minecraft_version}"
     }
 
 

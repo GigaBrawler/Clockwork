@@ -116,7 +116,16 @@ object ClockworkConfig {
         var unlockedModeRotationResistanceMultiplier = 1.0
 
         @ConfigEntry()
-        var unlockedModeOmegaErrorMultiplier = 50.0
+        var unlockedModeOmegaErrorMultiplier = 75.0
+
+        @ConfigEntry(description = "Maximum unlocked phys bearing angular acceleration in rad/s^2.", min = 0.0)
+        var unlockedModeMaxAngularAcceleration = 60.0
+
+        @ConfigEntry(description = "Unlocked mode gets full authority at or below this alignment error (degrees).", min = 0.0)
+        var unlockedModeAlignmentStartDegrees = 5.0
+
+        @ConfigEntry(description = "Unlocked mode authority fades to zero at this alignment error (degrees).", min = 0.0)
+        var unlockedModeAlignmentStopDegrees = 35.0
 
         @ConfigEntry()
         var allowWrenchingActivatedPhysBearing = false
