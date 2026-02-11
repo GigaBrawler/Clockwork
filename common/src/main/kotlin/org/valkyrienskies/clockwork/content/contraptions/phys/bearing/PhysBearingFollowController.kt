@@ -8,9 +8,9 @@ import org.joml.Vector3dc
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlin.math.sqrt
 import kotlin.math.tanh
 
 internal object PhysBearingFollowController {
@@ -31,17 +31,18 @@ internal object PhysBearingFollowController {
     private const val FOLLOW_MOVING_ERROR_RAMP_FULL_RAD = 0.2
     private const val FIXED_FORCE_HARD_MAX = 5.0e8
     private const val FIXED_TORQUE_HARD_MAX = 5.0e8
-    private const val FOLLOW_MOVING_FORCE_MIN = 1.0e5
-    private const val FOLLOW_MOVING_FORCE_MAX = 2.5e7
-    private const val FOLLOW_MOVING_TORQUE_MIN = 1.0e5
-    private const val FOLLOW_MOVING_TORQUE_MAX = 3.0e7
+    private const val FOLLOW_MOVING_FORCE_MIN = 2.0e4
+    private const val FOLLOW_MOVING_FORCE_MAX = 1.5e7
+    private const val FOLLOW_MOVING_TORQUE_MIN = 2.0e4
+    private const val FOLLOW_MOVING_TORQUE_MAX = 1.2e7
     private const val LOCKED_HOLD_FORCE_MAX = 2.0e8
     private const val LOCKED_HOLD_TORQUE_MAX = 2.0e8
-    private const val DYNAMIC_MAIN_SUPPRESSION_FLOOR = 0.05
+    private const val DYNAMIC_MAIN_FORCE_SUPPRESSION_FLOOR = 0.01
+    private const val DYNAMIC_MAIN_TORQUE_SUPPRESSION_FLOOR = 0.08
     private const val MOVING_TARGET_EPS_BASE_RAD = 0.004
     private const val MOVING_DRIFT_FORCE_BASE_RAD = 0.012
     private const val MOVING_REFRESH_TICKS_BASE = 2
-    private const val PROFILE_MIN_CAP = 1.0e5
+    private const val PROFILE_MIN_CAP = 2.0e4
 
     fun isFixedJointMode(modeName: String, aligning: Boolean): Boolean {
         return aligning || modeName == "FOLLOW_ANGLE" || modeName == "LOCKED"
@@ -49,6 +50,42 @@ internal object PhysBearingFollowController {
 
     fun shouldForceMovingFollowUpdate(modeName: String, aligning: Boolean, commandedSpeed: Float): Boolean {
         return modeName == "FOLLOW_ANGLE" && !aligning && commandedSpeed.isFinite() && abs(commandedSpeed) > 0.0f
+    }
+
+    fun isFollowCommandActive(modeName: String, aligning: Boolean, commandedSpeed: Float, speedEps: Float): Boolean {
+        if (modeName != "FOLLOW_ANGLE" || aligning) return false
+        if (!commandedSpeed.isFinite()) return false
+        return abs(commandedSpeed) >= abs(speedEps)
+    }
+
+    fun shouldLatchFollowStop(
+        modeName: String,
+        aligning: Boolean,
+        wasMovingFollow: Boolean,
+        followCommandActive: Boolean
+    ): Boolean {
+        return modeName == "FOLLOW_ANGLE" && !aligning && wasMovingFollow && !followCommandActive
+    }
+
+    fun normalizeDisplayAngleDeg720(angleDeg: Double): Float {
+        if (!angleDeg.isFinite()) return 0f
+        var normalized = angleDeg % 720.0
+        if (normalized < 0.0) normalized += 720.0
+        return normalized.toFloat()
+    }
+
+    fun computeAdaptiveCatchupGain(
+        errorAbsRad: Double,
+        minGain: Double,
+        maxGain: Double,
+        fullErrorRad: Double
+    ): Double {
+        if (!errorAbsRad.isFinite()) return 0.0
+        val min = minGain.coerceAtLeast(0.0)
+        val max = maxGain.coerceAtLeast(min)
+        val full = fullErrorRad.takeIf { it.isFinite() && it > 0.0 } ?: return max
+        val blend = (errorAbsRad / full).coerceIn(0.0, 1.0)
+        return min + (max - min) * blend
     }
 
     fun normalizeAngleErrorRad(targetAngleRad: Double, currentAngleRad: Double): Double {
@@ -191,9 +228,12 @@ internal object PhysBearingFollowController {
             val sub = subMass?.takeIf { it.isFinite() && it > 0.0 }
             val main = mainMass?.takeIf { it.isFinite() && it > 0.0 }
             if (sub != null && main != null) {
-                val massRatioBlend = sqrt((sub / (sub + main)).coerceIn(0.0, 1.0))
-                forceSuppressionScale = massRatioBlend.coerceIn(DYNAMIC_MAIN_SUPPRESSION_FLOOR, 1.0)
-                torqueSuppressionScale = (0.35 + 0.65 * massRatioBlend).coerceIn(0.35, 1.0)
+                val massRatio = (sub / (sub + main)).coerceIn(0.0, 1.0)
+                forceSuppressionScale = massRatio.pow(0.75).coerceIn(DYNAMIC_MAIN_FORCE_SUPPRESSION_FLOOR, 1.0)
+                torqueSuppressionScale = (
+                    DYNAMIC_MAIN_TORQUE_SUPPRESSION_FLOOR +
+                        (1.0 - DYNAMIC_MAIN_TORQUE_SUPPRESSION_FLOOR) * massRatio.pow(0.55)
+                    ).coerceIn(DYNAMIC_MAIN_TORQUE_SUPPRESSION_FLOOR, 1.0)
                 forceCap *= forceSuppressionScale
                 torqueCap *= torqueSuppressionScale
             }
@@ -208,7 +248,11 @@ internal object PhysBearingFollowController {
         forceCap = forceCap.coerceIn(PROFILE_MIN_CAP, FIXED_FORCE_HARD_MAX)
         torqueCap = torqueCap.coerceIn(PROFILE_MIN_CAP, FIXED_TORQUE_HARD_MAX)
 
-        val epsScale = if (!lockedLikeHold && movingFollow) 1.0 / forceSuppressionScale.coerceAtLeast(DYNAMIC_MAIN_SUPPRESSION_FLOOR) else 1.0
+        val epsScale = if (!lockedLikeHold && movingFollow) {
+            1.0 / forceSuppressionScale.coerceAtLeast(DYNAMIC_MAIN_FORCE_SUPPRESSION_FLOOR)
+        } else {
+            1.0
+        }
         val movingTargetEpsRad = (MOVING_TARGET_EPS_BASE_RAD * epsScale).coerceIn(MOVING_TARGET_EPS_BASE_RAD, 0.03)
         val movingDriftForceRad = (MOVING_DRIFT_FORCE_BASE_RAD * epsScale).coerceIn(MOVING_DRIFT_FORCE_BASE_RAD, 0.05)
         val movingRefreshTicks = if (!lockedLikeHold && movingFollow) {

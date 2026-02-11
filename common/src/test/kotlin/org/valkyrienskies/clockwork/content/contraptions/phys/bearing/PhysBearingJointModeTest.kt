@@ -191,8 +191,8 @@ class PhysBearingJointModeTest {
             commandedStepMagnitudeRad = 0.45,
             postLoadAuthorityMultiplier = 1.0
         )
-        assertTrue(extremeRatio.maxForce >= 1.0e5)
-        assertTrue(extremeRatio.maxTorque >= 1.0e5)
+        assertTrue(extremeRatio.maxForce >= 2.0e4)
+        assertTrue(extremeRatio.maxTorque >= 2.0e4)
     }
 
     @Test
@@ -216,5 +216,54 @@ class PhysBearingJointModeTest {
                 safetyRefreshTicks = 200
             )
         )
+    }
+
+    @Test
+    fun follow_stop_transition_does_not_chase_stale_integrated_target() {
+        val measuredAngleRad = Math.toRadians(35.0)
+        val staleIntegratedWrappedRad = Math.toRadians(130.0)
+        val desiredWithoutLatch = PhysBearingFollowController.selectDesiredContinuousTarget(
+            wrappedTargetRad = staleIntegratedWrappedRad,
+            measuredAngleRad = measuredAngleRad,
+            previousDesiredContinuousRad = measuredAngleRad,
+            inFollowSettleWindow = false
+        )
+
+        val shouldLatch = PhysBearingFollowController.shouldLatchFollowStop(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            wasMovingFollow = true,
+            followCommandActive = false
+        )
+        val desiredWithLatch = if (shouldLatch) measuredAngleRad else desiredWithoutLatch
+        assertTrue(shouldLatch)
+        assertTrue(abs(desiredWithLatch - measuredAngleRad) < 1.0e-12)
+        assertTrue(abs(PhysBearingFollowController.normalizeAngleErrorRad(desiredWithLatch, desiredWithoutLatch)) > 0.5)
+    }
+
+    @Test
+    fun high_mass_ratio_profile_substantially_reduces_force_and_torque() {
+        val heavyMain = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val balanced = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 2_000_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(heavyMain.maxForce <= balanced.maxForce * 0.2)
+        assertTrue(heavyMain.maxTorque <= balanced.maxTorque * 0.35)
     }
 }

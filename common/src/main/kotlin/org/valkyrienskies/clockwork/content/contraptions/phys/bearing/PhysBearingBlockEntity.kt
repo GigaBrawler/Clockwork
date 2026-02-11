@@ -160,10 +160,16 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     @Volatile private var fixedTrackStepAccelRadPerTick2 = 0.0
     @Volatile private var fixedTrackStepInitialized = false
     @Volatile private var fixedTrackLastMeasuredAngleRad: Double? = null
+    @Volatile private var fixedWasMovingFollow = false
+    @Volatile private var fixedStopHoldLatched = false
+    @Volatile private var fixedStopHoldAngleRad: Double? = null
+    @Volatile private var reconnectFreezeRequested = false
+    @Volatile private var reconnectFreezeLeaseHeld = false
+    @Volatile private var reconnectFreezeShipId = NO_SHIPTRAPTION_ID
 
     private var controllerCreationData: PhysBearingData? = null
     private var controllerUpdateData: PhysBearingUpdateData? = null
-    private var loadingFn: ((ServerLevel) -> Unit)? = null
+    private var loadingFn: ((ServerLevel) -> Boolean)? = null
 
     init {
         setLazyTickRate(3)
@@ -297,6 +303,72 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         fixedTrackStepAccelRadPerTick2 = 0.0
         fixedTrackStepInitialized = false
         fixedTrackLastMeasuredAngleRad = null
+        fixedWasMovingFollow = false
+        fixedStopHoldLatched = false
+        fixedStopHoldAngleRad = null
+    }
+
+    private fun requestReconnectFreeze(shipId: Long = shiptraptionID) {
+        if (shipId == NO_SHIPTRAPTION_ID) return
+        reconnectFreezeRequested = true
+        reconnectFreezeShipId = shipId
+    }
+
+    private fun holdReconnectFreeze(level: ServerLevel, shipId: Long = reconnectFreezeShipId): Boolean {
+        if (!reconnectFreezeRequested || shipId == NO_SHIPTRAPTION_ID) return false
+        val ship = level.shipObjectWorld.loadedShips.getById(shipId) ?: return false
+        if (!reconnectFreezeLeaseHeld || reconnectFreezeShipId != shipId) {
+            if (reconnectFreezeLeaseHeld) {
+                releaseReconnectFreeze(level)
+            }
+            acquireReconnectFreezeLease(shipId, ship.isStatic)
+            reconnectFreezeLeaseHeld = true
+            reconnectFreezeShipId = shipId
+        }
+        ship.isStatic = true
+        return true
+    }
+
+    private fun holdReconnectFreeze(level: VsiPhysLevel, shipId: Long): Boolean {
+        if (!reconnectFreezeRequested || shipId == NO_SHIPTRAPTION_ID) return false
+        val ship = level.getShipById(shipId) ?: return false
+        if (!reconnectFreezeLeaseHeld || reconnectFreezeShipId != shipId) {
+            if (reconnectFreezeLeaseHeld) {
+                releaseReconnectFreeze(level)
+            }
+            acquireReconnectFreezeLease(shipId, ship.isStatic)
+            reconnectFreezeLeaseHeld = true
+            reconnectFreezeShipId = shipId
+        }
+        ship.isStatic = true
+        return true
+    }
+
+    private fun releaseReconnectFreeze(level: ServerLevel?) {
+        val shipId = reconnectFreezeShipId
+        val leaseHeld = reconnectFreezeLeaseHeld
+
+        reconnectFreezeRequested = false
+        reconnectFreezeLeaseHeld = false
+        reconnectFreezeShipId = NO_SHIPTRAPTION_ID
+
+        if (!leaseHeld || shipId == NO_SHIPTRAPTION_ID) return
+        val restoreStatic = releaseReconnectFreezeLease(shipId) ?: return
+        if (level == null) return
+        level.shipObjectWorld.loadedShips.getById(shipId)?.isStatic = restoreStatic
+    }
+
+    private fun releaseReconnectFreeze(level: VsiPhysLevel) {
+        val shipId = reconnectFreezeShipId
+        val leaseHeld = reconnectFreezeLeaseHeld
+
+        reconnectFreezeRequested = false
+        reconnectFreezeLeaseHeld = false
+        reconnectFreezeShipId = NO_SHIPTRAPTION_ID
+
+        if (!leaseHeld || shipId == NO_SHIPTRAPTION_ID) return
+        val restoreStatic = releaseReconnectFreezeLease(shipId) ?: return
+        level.getShipById(shipId)?.isStatic = restoreStatic
     }
 
     private fun Quaterniondc.isFiniteQuat(): Boolean {
@@ -489,27 +561,48 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         tag.putVector3d(ClockworkConstants.Nbt.NEW_SHIPTRAPTION_CENTER, bearingPos)
     }
 
-    private fun loadTheRest(tag: CompoundTag, level: ServerLevel) {
-        var joint = this.joint ?: return
-        val mainId = level.getShipManagingPos(worldPosition)?.id
+    private fun loadTheRest(tag: CompoundTag, level: ServerLevel): Boolean {
+        val savedJoint = this.joint ?: return false
+        if (isRunning) {
+            requestReconnectFreeze(shiptraptionID)
+            holdReconnectFreeze(level, shiptraptionID)
+        }
 
+        val savedMainId = savedJoint.shipId1
+        val resolvedMainId = level.getShipManagingPos(worldPosition)?.id
+        val loadResolution = PhysBearingLoadController.resolveMainIdForLoad(savedMainId, resolvedMainId)
+        if (loadResolution.defer) {
+            return false
+        }
+        val mainIdForJoint = loadResolution.mainIdForJoint
+        val subLoaded = level.shipObjectWorld.loadedShips.getById(shiptraptionID) != null
+        val mainLoaded = mainIdForJoint?.let { level.shipObjectWorld.loadedShips.getById(it) != null } ?: true
+        if (PhysBearingLoadController.shouldDeferForEndpointAvailability(subLoaded, mainIdForJoint, mainLoaded)) {
+            return false
+        }
+
+        val oldSPos = tag.getVector3d(ClockworkConstants.Nbt.OLD_SHIPTRAPTION_CENTER) ?: return false
+        val newSPos = tag.getVector3d(ClockworkConstants.Nbt.NEW_SHIPTRAPTION_CENTER) ?: return false
         val oldBPos = BlockPos.of(tag.getLong(ClockworkConstants.Nbt.OLD_POS))
         val oldPos = oldBPos.toJOMLD()
-
         val newPos = worldPosition.toJOMLD()
 
-        val oldSPos = tag.getVector3d(ClockworkConstants.Nbt.OLD_SHIPTRAPTION_CENTER) ?: return
-        val newSPos = tag.getVector3d(ClockworkConstants.Nbt.NEW_SHIPTRAPTION_CENTER) ?: return
+        val savedBearingPos = tag.getVector3d("bearingPos") ?: return false
+        bearingPos = savedBearingPos.sub(oldSPos, Vector3d()).add(newSPos)
 
-        bearingPos = bearingPos.sub(oldSPos).add(newSPos)
-
-        this.joint = when(joint) {
-            is VSRevoluteJoint -> joint.copy(
-                shiptraptionID, pose0 = VSJointPose(joint.pose0.pos - oldSPos + newSPos, joint.pose0.rot),
-                mainId,         pose1 = VSJointPose(joint.pose1.pos - oldPos  + newPos,  joint.pose1.rot))
-            is VSFixedJoint -> joint.copy(
-                shiptraptionID, pose0 = VSJointPose(joint.pose0.pos - oldSPos + newSPos, joint.pose0.rot),
-                mainId,         pose1 = VSJointPose(joint.pose1.pos - oldPos  + newPos,  joint.pose1.rot))
+        this.joint = when (savedJoint) {
+            is VSRevoluteJoint -> savedJoint.copy(
+                shiptraptionID,
+                pose0 = VSJointPose(savedJoint.pose0.pos - oldSPos + newSPos, savedJoint.pose0.rot),
+                mainIdForJoint,
+                pose1 = VSJointPose(savedJoint.pose1.pos - oldPos + newPos, savedJoint.pose1.rot)
+            )
+            is VSFixedJoint -> savedJoint.copy(
+                shiptraptionID,
+                pose0 = VSJointPose(savedJoint.pose0.pos - oldSPos + newSPos, savedJoint.pose0.rot),
+                mainIdForJoint,
+                pose1 = VSJointPose(savedJoint.pose1.pos - oldPos + newPos, savedJoint.pose1.rot)
+            )
             else -> throw AssertionError()
         }
 
@@ -519,7 +612,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             getRealisticAngularSpeed(),
             shouldUseFixedJoint(movementMode?.get() ?: LockedMode.UNLOCKED, aligning),
             aligning,
-            mainId ?: -1L,
+            mainIdForJoint ?: -1L,
             this.joint?.pose1?.pos?.get(Vector3d()) ?: Vector3d(),
             this.joint?.pose0?.pos?.get(Vector3d()) ?: Vector3d()
         )
@@ -530,6 +623,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         needsJointRematerialization = true
         tryMakeJoint()
         tryUpdateData()
+        return true
     }
 
     override fun read(tag: CompoundTag, clientPacket: Boolean) {
@@ -586,8 +680,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         loadingFn = { level -> loadTheRest(tag, level) }
 
         val level = level as? ServerLevel ?: return
-        loadingFn!!(level)
-        loadingFn = null
+        if (loadingFn?.invoke(level) == true) {
+            loadingFn = null
+        }
     }
 
     override fun getInterpolatedAngle(partialTicks: Float): Float {
@@ -681,34 +776,54 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     fun tryMakeJoint() {
         ClockworkMod.physTickOnce(level.dimensionId!!) { level, _, tryNextTick ->
             level as VsiPhysLevel
-            val joint = this.joint ?: return@physTickOnce
+            val initialJoint = this.joint ?: return@physTickOnce
+            if (reconnectFreezeRequested) {
+                val freezeShipId = reconnectFreezeShipId.takeIf { it != NO_SHIPTRAPTION_ID }
+                    ?: initialJoint.shipId0
+                    ?: shiptraptionID
+                if (freezeShipId != NO_SHIPTRAPTION_ID) {
+                    holdReconnectFreeze(level, freezeShipId)
+                }
+            }
+
+            val availabilityJoint = this.joint ?: return@physTickOnce
             if (
-                joint.shipId0 != null && level.getShipById(joint.shipId0!!) == null ||
-                joint.shipId1 != null && level.getShipById(joint.shipId1!!) == null
+                availabilityJoint.shipId0 != null && level.getShipById(availabilityJoint.shipId0!!) == null ||
+                availabilityJoint.shipId1 != null && level.getShipById(availabilityJoint.shipId1!!) == null
             ) {
                 tryNextTick()
                 return@physTickOnce
             }
+
             val existing = level.getJointById(jointID)
             if (existing != null) {
+                val updateJoint = this.joint ?: return@physTickOnce
                 val sameKindAndEndpoints =
-                    (existing is VSRevoluteJoint && joint is VSRevoluteJoint &&
-                        existing.shipId0 == joint.shipId0 && existing.shipId1 == joint.shipId1) ||
-                        (existing is VSFixedJoint && joint is VSFixedJoint &&
-                            existing.shipId0 == joint.shipId0 && existing.shipId1 == joint.shipId1)
+                    (existing is VSRevoluteJoint && updateJoint is VSRevoluteJoint &&
+                        existing.shipId0 == updateJoint.shipId0 && existing.shipId1 == updateJoint.shipId1) ||
+                        (existing is VSFixedJoint && updateJoint is VSFixedJoint &&
+                            existing.shipId0 == updateJoint.shipId0 && existing.shipId1 == updateJoint.shipId1)
                 if (sameKindAndEndpoints) {
-                    level.updateJoint(jointID, joint)
+                    level.updateJoint(jointID, updateJoint)
                     isRunning = true
+                    if (reconnectFreezeRequested) {
+                        releaseReconnectFreeze(level)
+                    }
                     return@physTickOnce
                 }
-                if (existing == joint) {
+                if (existing == updateJoint) {
                     isRunning = true
+                    if (reconnectFreezeRequested) {
+                        releaseReconnectFreeze(level)
+                    }
                     return@physTickOnce
                 }
                 level.removeJoint(jointID)
                 jointID = -1
             }
-            val id = level.addJoint(joint)
+
+            val addJoint = this.joint ?: return@physTickOnce
+            val id = level.addJoint(addJoint)
             if (id == -1) {
                 tryNextTick()
                 return@physTickOnce
@@ -716,6 +831,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             this.jointID = id
 
             isRunning = true
+            if (reconnectFreezeRequested) {
+                releaseReconnectFreeze(level)
+            }
             lastStateChanged = ticks
         }
     }
@@ -841,6 +959,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     override fun destroy() {
         val level = level ?: return
         if (level.isClientSide || level !is ServerLevel) return
+        if (reconnectFreezeRequested) {
+            releaseReconnectFreeze(level)
+        }
 
         val ship = level.shipObjectWorld.loadedShips.getById(shiptraptionID) ?: return
         BearingController.getOrCreate(ship)!!.removePhysBearing(bearingID)
@@ -876,6 +997,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             fixedTrackStepAccelRadPerTick2 = 0.0
             fixedTrackStepInitialized = false
             fixedTrackLastMeasuredAngleRad = null
+            fixedWasMovingFollow = false
+            fixedStopHoldLatched = false
+            fixedStopHoldAngleRad = null
             needsJointRematerialization = true
             tryUpdateData()
         } else {
@@ -925,6 +1049,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     }
 
     private fun resetState() {
+        if (reconnectFreezeRequested) {
+            releaseReconnectFreeze(level as? ServerLevel)
+        }
         bearingID = -1
         shiptraptionID = NO_SHIPTRAPTION_ID
         isRunning = false
@@ -966,11 +1093,17 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val speedChanged = lastSpeed != speedNow
         val aligningChanged = lastAligningState != aligningNow
         val modeOrAlignmentTransition = modeChanged || aligningChanged
+        val followCommandActive = PhysBearingFollowController.isFollowCommandActive(
+            modeName = mode.name,
+            aligning = aligningNow,
+            commandedSpeed = speedNow,
+            speedEps = FOLLOW_COMMAND_ACTIVE_SPEED_EPS
+        )
 
         if (modeChanged && mode == LockedMode.FOLLOW_ANGLE) {
             currentJointAngleRad(level)?.let { angleRad ->
                 // FOLLOW enters from live physical angle to avoid startup snap.
-                targetAngle = Math.toDegrees(angleRad).toFloat()
+                targetAngle = PhysBearingFollowController.normalizeDisplayAngleDeg720(Math.toDegrees(angleRad))
             }
             lockedHoldAngleRad = null
         } else if (modeChanged && mode == LockedMode.LOCKED) {
@@ -1011,6 +1144,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             fixedTrackStepAccelRadPerTick2 = 0.0
             fixedTrackStepInitialized = false
             fixedTrackLastMeasuredAngleRad = null
+            fixedWasMovingFollow = false
+            fixedStopHoldLatched = false
+            fixedStopHoldAngleRad = null
         } else if (!fixedMode) {
             activeFixedTargetRad = null
             fixedZeroRelRotMainToSub = null
@@ -1029,6 +1165,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             fixedTrackStepAccelRadPerTick2 = 0.0
             fixedTrackStepInitialized = false
             fixedTrackLastMeasuredAngleRad = null
+            fixedWasMovingFollow = false
+            fixedStopHoldLatched = false
+            fixedStopHoldAngleRad = null
         }
 
         var forcedFixedTargetRad: Double? = null
@@ -1093,7 +1232,33 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 val inFollowSettleWindow = mode == LockedMode.FOLLOW_ANGLE &&
                     !aligningNow &&
                     fixedPostLoadSettleTicksRemaining > 0
-                val desiredTargetRad = PhysBearingFollowController.selectDesiredContinuousTarget(
+                val shouldLatchFollowStop = PhysBearingFollowController.shouldLatchFollowStop(
+                    modeName = mode.name,
+                    aligning = aligningNow,
+                    wasMovingFollow = fixedWasMovingFollow,
+                    followCommandActive = followCommandActive
+                )
+                if (shouldLatchFollowStop) {
+                    fixedStopHoldLatched = true
+                    fixedStopHoldAngleRad = measuredTargetRad
+                    fixedDesiredTargetRadContinuous = measuredTargetRad
+                    fixedDesiredTargetInitialized = true
+                    activeFixedTargetRad = measuredTargetRad
+                    fixedTrackStepRadPerTick = 0.0
+                    fixedTrackStepAccelRadPerTick2 = 0.0
+                    fixedTrackStepInitialized = true
+                    fixedTrackLastMeasuredAngleRad = measuredTargetRad
+                    targetAngle = PhysBearingFollowController.normalizeDisplayAngleDeg720(Math.toDegrees(measuredTargetRad))
+                    lastAngle = targetAngle
+                    curAngle = targetAngle
+                } else if (mode == LockedMode.FOLLOW_ANGLE && !aligningNow && followCommandActive) {
+                    fixedStopHoldLatched = false
+                    fixedStopHoldAngleRad = null
+                }
+
+                val latchedStopTargetRad = fixedStopHoldAngleRad
+                    ?.takeIf { mode == LockedMode.FOLLOW_ANGLE && !aligningNow && !followCommandActive && fixedStopHoldLatched && it.isFinite() }
+                val desiredTargetRad = latchedStopTargetRad ?: PhysBearingFollowController.selectDesiredContinuousTarget(
                     wrappedTargetRad = desiredWrappedRad,
                     measuredAngleRad = measuredTargetRad,
                     previousDesiredContinuousRad = if (fixedDesiredTargetInitialized) fixedDesiredTargetRadContinuous else null,
@@ -1107,11 +1272,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 val measuredStepRadPerTick = fixedTrackLastMeasuredAngleRad?.let { lastMeasured ->
                     shortestAngleErrorRad(measuredTargetRad, lastMeasured)
                 }
-                val movingFollow = PhysBearingFollowController.shouldForceMovingFollowUpdate(
-                    mode.name,
-                    aligningNow,
-                    speedNow
-                ) && !inFollowSettleWindow
+                val movingFollow = mode == LockedMode.FOLLOW_ANGLE && !aligningNow && followCommandActive && !inFollowSettleWindow
 
                 val steppedTargetRad = when {
                     mode == LockedMode.LOCKED || aligningNow -> {
@@ -1164,7 +1325,13 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                             val catchupGain = if (inFollowSettleWindow && settleProgress < 0.7) {
                                 0.0
                             } else {
-                                FIXED_TRACK_CATCHUP_GAIN
+                                val catchupErrorAbs = abs(shortestAngleErrorRad(desiredTargetRad, activeTargetRad))
+                                PhysBearingFollowController.computeAdaptiveCatchupGain(
+                                    errorAbsRad = catchupErrorAbs,
+                                    minGain = FIXED_TRACK_CATCHUP_MIN_GAIN,
+                                    maxGain = FIXED_TRACK_CATCHUP_GAIN,
+                                    fullErrorRad = FIXED_TRACK_CATCHUP_FULL_ERROR_RAD
+                                )
                             }
                             val catchupError = shortestAngleErrorRad(desiredTargetRad, activeTargetRad)
                             val catchup = catchupError.coerceIn(
@@ -1266,6 +1433,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             speedChanged || modeOrAlignmentTransition || needsJointRematerialization || jointKindMismatch || lastAppliedJointKindFixed
         }
 
+        fixedWasMovingFollow = fixedMode && mode == LockedMode.FOLLOW_ANGLE && !aligningNow && followCommandActive
         lastSpeed = speedNow
         lastMode = mode
         lastAligningState = aligningNow
@@ -1324,9 +1492,10 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         ticks++
         if (level!!.isClientSide) clientAngleDiff /= 2f
         if (!level!!.isClientSide) {
-            loadingFn?.also {
-                it(level as ServerLevel)
-                loadingFn = null
+            loadingFn?.let { pendingLoad ->
+                if (pendingLoad(level as ServerLevel)) {
+                    loadingFn = null
+                }
             }
 
             val subShip = (level as ServerLevel).shipObjectWorld.loadedShips.getById(shiptraptionID)
@@ -1436,6 +1605,32 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
     override fun isWoodenTop(): Boolean = false
 
     companion object {
+        private data class ReconnectFreezeLease(
+            var holders: Int,
+            val initialStatic: Boolean
+        )
+
+        private val reconnectFreezeLeases: MutableMap<Long, ReconnectFreezeLease> = mutableMapOf()
+
+        @Synchronized
+        private fun acquireReconnectFreezeLease(shipId: Long, initialStatic: Boolean) {
+            val lease = reconnectFreezeLeases[shipId]
+            if (lease == null) {
+                reconnectFreezeLeases[shipId] = ReconnectFreezeLease(holders = 1, initialStatic = initialStatic)
+            } else {
+                lease.holders += 1
+            }
+        }
+
+        @Synchronized
+        private fun releaseReconnectFreezeLease(shipId: Long): Boolean? {
+            val lease = reconnectFreezeLeases[shipId] ?: return null
+            lease.holders -= 1
+            if (lease.holders > 0) return null
+            reconnectFreezeLeases.remove(shipId)
+            return lease.initialStatic
+        }
+
         const val NO_SHIPTRAPTION_ID: Long = -1
 
         private const val SERVO_JOINT_FORCE_MAX = 5.0e8
@@ -1451,10 +1646,13 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         private const val FIXED_POST_LOAD_SETTLE_TICKS = 12
         private const val FIXED_POST_LOAD_AUTHORITY_MIN_MULTIPLIER = 0.15
         private const val FIXED_MOVING_COMMAND_ACTIVE_STEP_RAD = 5.0e-5
+        private const val FOLLOW_COMMAND_ACTIVE_SPEED_EPS = 1.0e-3f
         private const val FIXED_TRACK_MAX_ACCEL_RAD_PER_TICK2 = 0.08
         private const val FIXED_TRACK_MAX_JERK_RAD_PER_TICK3 = 0.20
         private const val FIXED_TRACK_CATCHUP_GAIN = 0.18
-        private const val FIXED_TRACK_CATCHUP_MAX_RAD_PER_TICK = 0.02
+        private const val FIXED_TRACK_CATCHUP_MIN_GAIN = 0.04
+        private const val FIXED_TRACK_CATCHUP_FULL_ERROR_RAD = 0.3
+        private const val FIXED_TRACK_CATCHUP_MAX_RAD_PER_TICK = 0.01
         private const val FIXED_FOLLOW_TRACK_MAX_STEP_RAD = 1.2
 
         //tolerance is in degrees

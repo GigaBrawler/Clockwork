@@ -397,8 +397,8 @@ class PhysBearingFollowControllerTest {
             commandedStepMagnitudeRad = 0.45,
             postLoadAuthorityMultiplier = 1.0
         )
-        assertTrue(profile.maxForce in 1.0e5..2.5e7)
-        assertTrue(profile.maxTorque in 1.0e5..3.0e7)
+        assertTrue(profile.maxForce in 2.0e4..1.5e7)
+        assertTrue(profile.maxTorque in 2.0e4..1.2e7)
         assertTrue(profile.movingTargetEpsRad >= 0.004)
         assertTrue(profile.movingDriftForceRad >= 0.012)
     }
@@ -522,5 +522,103 @@ class PhysBearingFollowControllerTest {
         assertFalse(PhysBearingFollowController.shouldForceMovingFollowUpdate("FOLLOW_ANGLE", aligning = false, commandedSpeed = 0.0f))
         assertFalse(PhysBearingFollowController.shouldForceMovingFollowUpdate("FOLLOW_ANGLE", aligning = true, commandedSpeed = 1.0f))
         assertFalse(PhysBearingFollowController.shouldForceMovingFollowUpdate("LOCKED", aligning = false, commandedSpeed = 1.0f))
+        assertFalse(PhysBearingFollowController.isFollowCommandActive("FOLLOW_ANGLE", aligning = false, commandedSpeed = 5.0e-4f, speedEps = 1.0e-3f))
+        assertTrue(PhysBearingFollowController.isFollowCommandActive("FOLLOW_ANGLE", aligning = false, commandedSpeed = 1.0e-3f, speedEps = 1.0e-3f))
+    }
+
+    @Test
+    fun stop_latch_holds_measured_angle_on_command_drop() {
+        assertTrue(
+            PhysBearingFollowController.shouldLatchFollowStop(
+                modeName = "FOLLOW_ANGLE",
+                aligning = false,
+                wasMovingFollow = true,
+                followCommandActive = false
+            )
+        )
+        val measuredDeg = -10.0
+        val normalized = PhysBearingFollowController.normalizeDisplayAngleDeg720(measuredDeg)
+        assertTrue(normalized in 0f..720f)
+        assertTrue(abs(normalized - 710f) < 1.0e-6f)
+    }
+
+    @Test
+    fun stop_latch_clears_on_command_resume() {
+        assertFalse(
+            PhysBearingFollowController.shouldLatchFollowStop(
+                modeName = "FOLLOW_ANGLE",
+                aligning = false,
+                wasMovingFollow = true,
+                followCommandActive = true
+            )
+        )
+    }
+
+    @Test
+    fun moving_authority_mass_ratio_scaling_stronger_for_heavy_main() {
+        val lowRatio = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val highRatio = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 2_000_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(lowRatio.maxForce <= highRatio.maxForce * 0.2)
+        assertTrue(lowRatio.maxTorque <= highRatio.maxTorque * 0.35)
+    }
+
+    @Test
+    fun moving_follow_authority_still_below_locked_hold() {
+        val followMoving = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "FOLLOW_ANGLE",
+            aligning = false,
+            movingFollow = true,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.45,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        val locked = PhysBearingFollowController.computeFixedAuthorityProfile(
+            modeName = "LOCKED",
+            aligning = false,
+            movingFollow = false,
+            inPostLoadSettle = false,
+            subMass = 10_000.0,
+            mainMass = 2_000_000.0,
+            commandedStepMagnitudeRad = 0.0,
+            postLoadAuthorityMultiplier = 1.0
+        )
+        assertTrue(followMoving.maxForce < locked.maxForce)
+        assertTrue(followMoving.maxTorque < locked.maxTorque)
+    }
+
+    @Test
+    fun adaptive_catchup_monotonic_and_bounded() {
+        val minGain = 0.04
+        val maxGain = 0.18
+        val fullError = 0.3
+        val tiny = PhysBearingFollowController.computeAdaptiveCatchupGain(0.0, minGain, maxGain, fullError)
+        val mid = PhysBearingFollowController.computeAdaptiveCatchupGain(0.15, minGain, maxGain, fullError)
+        val large = PhysBearingFollowController.computeAdaptiveCatchupGain(2.0, minGain, maxGain, fullError)
+        assertTrue(tiny in minGain..maxGain)
+        assertTrue(mid in minGain..maxGain)
+        assertTrue(large in minGain..maxGain)
+        assertTrue(tiny <= mid)
+        assertTrue(mid <= large)
+        assertTrue(abs(large - maxGain) < 1.0e-9)
     }
 }
