@@ -38,7 +38,14 @@ import org.valkyrienskies.clockwork.util.ClockworkConstants
 import org.valkyrienskies.clockwork.util.ClockworkConstants.Nbt.ORIGINAL_DIRECTION
 import org.valkyrienskies.clockwork.util.ClockworkUtils.getVector3d
 import org.valkyrienskies.clockwork.util.GlueAssembler.collectGlued
+import org.valkyrienskies.clockwork.util.addJointPersistent
+import org.valkyrienskies.clockwork.util.bindPersistentKey
+import org.valkyrienskies.clockwork.util.buildPersistentOwnerRef
 import org.valkyrienskies.clockwork.util.gtpa
+import org.valkyrienskies.clockwork.util.newPersistentJointKey
+import org.valkyrienskies.clockwork.util.removeJointPersistent
+import org.valkyrienskies.clockwork.util.resolveRuntimeJointId
+import org.valkyrienskies.clockwork.util.updateJointPersistent
 import org.valkyrienskies.clockwork.util.updateJoint
 import org.valkyrienskies.clockwork.util.minus
 import org.valkyrienskies.clockwork.util.plus
@@ -109,6 +116,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         private set
     @Volatile var jointID : Int = -1
         private set
+    @Volatile var persistentJointKey: String? = null
+        private set
+    @Volatile private var jointAddQueued = false
 
     private var lastException: AssemblyException? = null
     private var open = false
@@ -195,7 +205,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
 
         if (jointID != -1 && level is ServerLevel) {
-            (level as ServerLevel).gtpa.updateJoint(jointID, joint!!)
+            (level as ServerLevel).gtpa.updateJointPersistent(jointID, joint!!)
         }
     }
 
@@ -219,7 +229,6 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         var angle = Math.toRadians(lastAngle + (targetAngle - lastAngle) * ((pTick+1) / 3.0))
         if (aligning) { angle = 0.0 }
 
-        physLevel as VsiPhysLevel
         if (sDir1 == null || sDir2 == null) {
             sDir1 = bearingAxis
             sDir2 = bearingAxis
@@ -242,7 +251,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             compliance = 1e-100
         )
 
-        physLevel.updateJoint(jointID, this.joint!!)
+        val serverLevel = this.level as? ServerLevel ?: return
+        serverLevel.gtpa.updateJointPersistent(jointID, this.joint!!)
 
         pTick = max(pTick++, 2)
     }
@@ -274,6 +284,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         }
 
         tag.putInt("jointID", jointID)
+        persistentJointKey?.let { tag.putString("persistentJointKey", it) }
 
         if (shiptraptionID == NO_SHIPTRAPTION_ID) return
 
@@ -362,6 +373,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         } else if (tag.contains("fjoint")) {
             joint = mapper.readValue(tag.getByteArray("fjoint"), VSFixedJoint::class.java)
             jointID = tag.getInt("jointID")
+        }
+        if (tag.contains("persistentJointKey")) {
+            persistentJointKey = tag.getString("persistentJointKey").ifBlank { null }
         }
 
         super.read(tag, clientPacket)
@@ -463,28 +477,44 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
 
     fun tryMakeJoint() {
         val joint = joint ?: return
+        val serverLevel = level as? ServerLevel ?: return
 
-        ClockworkMod.physTickOnce(level.dimensionId!!) { level, _, tryNextTick ->
-            level as VsiPhysLevel
-            val existing = level.getJointById(jointID)
-            if (existing != null && existing == joint) {
+        if (persistentJointKey.isNullOrBlank()) {
+            persistentJointKey = newPersistentJointKey()
+        }
+
+        if (jointID != -1) {
+            val resolvedJointId = serverLevel.gtpa.resolveRuntimeJointId(jointID)
+            val existing = serverLevel.gtpa.getJointById(resolvedJointId)
+            if (existing != null) {
+                jointID = resolvedJointId
+                serverLevel.gtpa.bindPersistentKey(persistentJointKey!!, resolvedJointId)
+                jointAddQueued = false
                 isRunning = true
-                return@physTickOnce
+                return
             }
-            if (
-                joint.shipId0 != null && level.getShipById(joint.shipId0!!) == null ||
-                joint.shipId1 != null && level.getShipById(joint.shipId1!!) == null
-            ) {
-                tryNextTick()
-                return@physTickOnce
-            }
-            val id = level.addJoint(joint)
-            if (id == -1) {
-                tryNextTick()
-                return@physTickOnce
-            }
-            this.jointID = id
+        }
 
+        if (jointAddQueued) {
+            return
+        }
+        jointAddQueued = true
+
+        val ownerRef = buildPersistentOwnerRef(serverLevel.dimensionId, worldPosition, "main_joint")
+        serverLevel.gtpa.addJointPersistent(
+            joint = joint,
+            ownerType = "clockwork_phys_bearing",
+            ownerRef = ownerRef,
+            persistentKey = persistentJointKey,
+            delay = 0
+        ) { runtimeId ->
+            jointAddQueued = false
+            if (runtimeId < 0) {
+                jointID = -1
+                isRunning = false
+                return@addJointPersistent
+            }
+            jointID = runtimeId
             isRunning = true
             lastStateChanged = ticks
         }
@@ -612,7 +642,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val ship = level.shipObjectWorld.loadedShips.getById(shiptraptionID) ?: return
         BearingController.getOrCreate(ship)!!.removePhysBearing(bearingID)
 
-        joint?.let { level.gtpa.removeJoint(jointID) }
+        joint?.let { level.gtpa.removeJointPersistent(jointID) }
     }
 
     fun disassemble() {
@@ -687,7 +717,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         if (level.shipObjectWorld.allShips.getById(shiptraptionID) != null) return false
 
         if (jointID != -1) {
-            joint?.let { level.gtpa.removeJoint(jointID) }
+            joint?.let { level.gtpa.removeJointPersistent(jointID) }
+            jointAddQueued = false
         }
 
         prepareAnimatedClose()
@@ -701,6 +732,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         isRunning = false
         joint = null
         jointID = -1
+        persistentJointKey = null
+        jointAddQueued = false
         aligning = false
         controllerCreationData = null
         controllerUpdateData = null

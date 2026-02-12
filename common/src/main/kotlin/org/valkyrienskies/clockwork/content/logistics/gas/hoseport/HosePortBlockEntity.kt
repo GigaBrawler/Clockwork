@@ -18,10 +18,14 @@ import org.valkyrienskies.clockwork.ClockworkMod
 import org.valkyrienskies.clockwork.ClockworkModClient
 import org.valkyrienskies.clockwork.ClockworkSounds
 import org.valkyrienskies.clockwork.content.physicalities.extendon.ExtendonBlockEntity.Companion.getQuaterniond
+import org.valkyrienskies.clockwork.util.addJointPersistent
+import org.valkyrienskies.clockwork.util.buildPersistentOwnerRef
 import org.valkyrienskies.clockwork.util.KNodeBlockEntity
 import org.valkyrienskies.clockwork.util.gtpa
+import org.valkyrienskies.clockwork.util.removeJointPersistent
 import org.valkyrienskies.clockwork.util.universal_joint.IUniversalJoint
 import org.valkyrienskies.clockwork.util.updateJoint
+import org.valkyrienskies.clockwork.util.updateJointPersistent
 import org.valkyrienskies.core.api.ships.properties.ShipId
 import org.valkyrienskies.core.internal.joints.VSD6Joint
 import org.valkyrienskies.core.internal.joints.VSD6Joint.D6Axis
@@ -34,6 +38,7 @@ import org.valkyrienskies.kelvin.api.DuctEdge
 import org.valkyrienskies.kelvin.api.DuctNodePos
 import org.valkyrienskies.kelvin.api.edges.PipeDuctEdge
 import org.valkyrienskies.kelvin.util.KelvinExtensions.toDuctNodePos
+import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getShipManagingPos
 import org.valkyrienskies.mod.common.toWorldCoordinates
 import org.valkyrienskies.mod.common.util.toJOMLD
@@ -70,7 +75,7 @@ class HosePortBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
 
         if (distanceJointId != null && distanceJoint != null) {
             val level = level as ServerLevel
-            level.gtpa.updateJoint(distanceJointId!!, this.distanceJoint!!)
+            level.gtpa.updateJointPersistent(distanceJointId!!, this.distanceJoint!!)
         }
     }
 
@@ -143,7 +148,14 @@ class HosePortBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
         distanceJoint = VSDistanceJoint(pose0 = VSJointPose(pos0, quater0), pose1 = VSJointPose(pos1, quater1) , shipId0 = shipId0, shipId1 = shipId1,
             minDistance = 0f, maxDistance = (distanceInWorld + 1.0).roundToInt().toFloat()
         )
-        level.gtpa.addJoint(distanceJoint!!) { distanceJointId = it }
+        val ownerRef = buildPersistentOwnerRef(level.dimensionId, blockPos, "hose_distance")
+        level.gtpa.addJointPersistent(
+            joint = distanceJoint!!,
+            ownerType = "clockwork_hose_port",
+            ownerRef = ownerRef,
+            persistentKey = null,
+            delay = 0
+        ) { distanceJointId = it }
 
         main = true
     }
@@ -151,7 +163,7 @@ class HosePortBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
     private fun removeJoint() {
         val level = level as ServerLevel
 
-        level.gtpa.removeJoint(distanceJointId!!)
+        level.gtpa.removeJointPersistent(distanceJointId!!)
 
         distanceJoint = null
         distanceJointId = null

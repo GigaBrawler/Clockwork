@@ -29,9 +29,12 @@ import org.joml.Vector3dc
 import org.valkyrienskies.clockwork.ClockworkMod
 import org.valkyrienskies.clockwork.mixin.accessors.IMixinPistonContraption
 import org.valkyrienskies.clockwork.mixinduck.MixinAbstractContraptionEntityDuck
+import org.valkyrienskies.clockwork.util.addJointPersistent
+import org.valkyrienskies.clockwork.util.buildPersistentOwnerRef
 import org.valkyrienskies.clockwork.util.ClockworkConstants
 import org.valkyrienskies.clockwork.util.gtpa
-import org.valkyrienskies.clockwork.util.updateJoint
+import org.valkyrienskies.clockwork.util.removeJointPersistent
+import org.valkyrienskies.clockwork.util.updateJointPersistent
 import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.core.api.ships.Ship
 import org.valkyrienskies.core.internal.joints.VSFixedJoint
@@ -209,7 +212,7 @@ class SlickerMovementBehavior : MovementBehaviour {
 
             if (constraintPair != null) {
                 val attachConstraint2 = constraintPair
-                (context.world as ServerLevel).gtpa.updateJoint(extraData.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID), attachConstraint2)
+                (context.world as ServerLevel).gtpa.updateJointPersistent(extraData.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID), attachConstraint2)
                 extraData.putInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID, extraData.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID))
                 extraData.putByteArray(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT, mapper.writeValueAsBytes(attachConstraint2))
                 extraData.putDouble(ClockworkConstants.Nbt.SHIP_SLICKER_DISTANCE, distance)
@@ -341,7 +344,7 @@ class SlickerMovementBehavior : MovementBehaviour {
                 val attachConstraintData = tag.getByteArray(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT)
                 val attachConstraint = mapper.readValue(attachConstraintData, VSFixedJoint::class.java)
 
-                level.gtpa.updateJoint(attachConstraintId, attachConstraint)
+                level.gtpa.updateJointPersistent(attachConstraintId, attachConstraint)
 
                 adjustedDistance = 1.0
                 realShip1 = attachConstraint.shipId0?.let { level.shipObjectWorld.loadedShips.getById(it) }
@@ -357,9 +360,21 @@ class SlickerMovementBehavior : MovementBehaviour {
             //TODO
             if (constraintPair != null) {
                 val attachConstraint = constraintPair
-                level.gtpa.addJoint(attachConstraint, 3, {
-                    tag.putInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID, it ?: -1)
-                })
+                val slickerOwnerRef = buildPersistentOwnerRef(
+                    level.dimensionId,
+                    BlockPos.containing(realShip1Pos.x, realShip1Pos.y, realShip1Pos.z),
+                    "slicker_attachment"
+                )
+                level.gtpa.addJointPersistent(
+                    joint = attachConstraint,
+                    ownerType = "clockwork_slicker",
+                    ownerRef = slickerOwnerRef,
+                    persistentKey = null,
+                    delay = 3,
+                    function = { id ->
+                        tag.putInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID, id)
+                    }
+                )
 
                 tag.putByteArray(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT, mapper.writeValueAsBytes(attachConstraint))
 
@@ -420,7 +435,7 @@ class SlickerMovementBehavior : MovementBehaviour {
 
         fun removeConstraint(level: ServerLevel, removeTags: Boolean, compoundTag: CompoundTag) {
             if (compoundTag.contains(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID)) {
-                level.gtpa.removeJoint(compoundTag.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID))
+                level.gtpa.removeJointPersistent(compoundTag.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID))
 
                 if (removeTags) {
                     compoundTag.remove(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID)

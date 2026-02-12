@@ -23,10 +23,14 @@ import org.valkyrienskies.clockwork.ClockworkItems
 import org.valkyrienskies.clockwork.ClockworkMod
 import org.valkyrienskies.clockwork.ClockworkModClient
 import org.valkyrienskies.clockwork.ClockworkSounds
+import org.valkyrienskies.clockwork.util.addJointPersistent
+import org.valkyrienskies.clockwork.util.buildPersistentOwnerRef
 import org.valkyrienskies.clockwork.util.KNodeBlockEntity
 import org.valkyrienskies.clockwork.util.gtpa
+import org.valkyrienskies.clockwork.util.removeJointPersistent
 import org.valkyrienskies.clockwork.util.universal_joint.IUniversalJoint
 import org.valkyrienskies.clockwork.util.updateJoint
+import org.valkyrienskies.clockwork.util.updateJointPersistent
 import org.valkyrienskies.core.api.ships.properties.ShipId
 import org.valkyrienskies.core.api.world.properties.DimensionId
 import org.valkyrienskies.core.internal.joints.*
@@ -95,7 +99,7 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
 
         val tempJoint = VSJointAndId(distanceJointId!!, VSDistanceJoint(distanceJoint!!.shipId0, distanceJoint!!.pose0, distanceJoint!!.shipId1, distanceJoint!!.pose1, minDistance = lerpedDistance, maxDistance = lerpedDistance))
 
-        serverLevel.gtpa.updateJoint(distanceJointId!!, tempJoint.joint)
+        serverLevel.gtpa.updateJointPersistent(distanceJointId!!, tempJoint.joint)
         distanceJoint = tempJoint.joint as VSDistanceJoint
     }
 
@@ -175,7 +179,14 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
 
         distanceJoint = VSDistanceJoint(pose0 = VSJointPose(pos0, quater0), pose1 = VSJointPose(pos1, quater1) , shipId0 = shipId0, shipId1 = shipId1,
             minDistance = 0.5f, maxDistance = 1000f, damping = 1000f )
-        level.gtpa.addJoint(distanceJoint!!) { distanceJointId = it }
+        val distanceOwnerRef = buildPersistentOwnerRef(level.dimensionId, blockPos, "extendon_distance")
+        level.gtpa.addJointPersistent(
+            joint = distanceJoint!!,
+            ownerType = "clockwork_extendon",
+            ownerRef = distanceOwnerRef,
+            persistentKey = null,
+            delay = 0
+        ) { distanceJointId = it }
 
         val limit = VSD6Joint.LimitCone(Math.PI.toFloat()/4f, Math.PI.toFloat()/4f)
         val motions = EnumMap<D6Axis, D6Motion>(D6Axis::class.java)
@@ -190,7 +201,14 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
 
 
         sphericalJoint = VSD6Joint(pose0 = VSJointPose(pos0, quater0), pose1 = VSJointPose(pos1, quater1) , shipId0 = shipId0, shipId1 = shipId1, swingLimit = limit, motions = motions,  )
-        level.gtpa.addJoint(sphericalJoint!!) { sphericalJointId = it }
+        val sphericalOwnerRef = buildPersistentOwnerRef(level.dimensionId, blockPos, "extendon_spherical")
+        level.gtpa.addJointPersistent(
+            joint = sphericalJoint!!,
+            ownerType = "clockwork_extendon",
+            ownerRef = sphericalOwnerRef,
+            persistentKey = null,
+            delay = 0
+        ) { sphericalJointId = it }
 
         main = true
     }
@@ -198,8 +216,8 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
     private fun removeJoint() {
         val level = level as ServerLevel
 
-        if (distanceJointId != null) level.gtpa.removeJoint(distanceJointId!!)
-        if (sphericalJointId != null) level.gtpa.removeJoint(sphericalJointId!!)
+        if (distanceJointId != null) level.gtpa.removeJointPersistent(distanceJointId!!)
+        if (sphericalJointId != null) level.gtpa.removeJointPersistent(sphericalJointId!!)
 
         distanceJoint = null
         distanceJointId = null

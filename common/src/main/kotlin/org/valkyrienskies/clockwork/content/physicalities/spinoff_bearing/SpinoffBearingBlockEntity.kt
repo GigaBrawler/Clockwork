@@ -27,7 +27,11 @@ import org.joml.Vector3d
 import org.joml.Vector3dc
 import org.valkyrienskies.clockwork.ClockworkSounds
 import org.valkyrienskies.clockwork.content.physicalities.extendon.ExtendonBlockEntity
+import org.valkyrienskies.clockwork.util.addJointPersistent
+import org.valkyrienskies.clockwork.util.buildPersistentOwnerRef
 import org.valkyrienskies.clockwork.util.gtpa
+import org.valkyrienskies.clockwork.util.newPersistentJointKey
+import org.valkyrienskies.clockwork.util.removeJointPersistent
 import org.valkyrienskies.core.api.VsBeta
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.core.api.ships.PhysShip
@@ -67,6 +71,10 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
     var isConnected : Boolean = false
     @Volatile
     var jointId : VSJointId = -1
+    @Volatile
+    var persistentJointKey: String? = null
+    @Volatile
+    private var jointAddQueued: Boolean = false
 
     val position : BlockPos
         get() = this.worldPosition
@@ -95,6 +103,7 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
         }
         tag.putInt("jointId", jointId)
         tag.putBoolean("isLeader", isLeader)
+        persistentJointKey?.let { tag.putString("persistentJointKey", it) }
         super.write(tag, clientPacket)
     }
 
@@ -110,6 +119,10 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
             isLeader = tag.getBoolean("isLeader")
         }
         jointId = tag.getInt("jointId")
+        if (tag.contains("persistentJointKey")) {
+            persistentJointKey = tag.getString("persistentJointKey").ifBlank { null }
+        }
+        jointAddQueued = false
         shouldVerifyPartner = true
     }
 
@@ -252,32 +265,59 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
                         driveFreeSpin = true
                     )
                 }
-                jointId = vsiPhysLevel.addJoint(revoluteJoint)
-                shouldVerifyConnection = false
+                val serverLevel = level as? ServerLevel ?: return
+                if (persistentJointKey.isNullOrBlank()) {
+                    persistentJointKey = newPersistentJointKey()
+                }
+                if (!jointAddQueued) {
+                    jointAddQueued = true
+                    val ownerRef = buildPersistentOwnerRef(serverLevel.dimensionId, position, "pair_joint")
+                    serverLevel.gtpa.addJointPersistent(
+                        joint = revoluteJoint,
+                        ownerType = "clockwork_spinoff_bearing",
+                        ownerRef = ownerRef,
+                        persistentKey = persistentJointKey,
+                        delay = 0
+                    ) { runtimeId ->
+                        jointAddQueued = false
+                        if (runtimeId < 0) {
+                            isConnected = false
+                            jointId = -1
+                            shouldVerifyConnection = true
+                            return@addJointPersistent
+                        }
+                        jointId = runtimeId
+                        isConnected = true
+                        shouldVerifyConnection = false
+                    }
+                }
             }
         }
         if (shouldRemoveJoint) {
-            val vsiPhysLevel = physLevel as VsiPhysLevel
-            vsiPhysLevel.removeJoint(jointId)
+            val serverLevel = level as? ServerLevel ?: return
+            serverLevel.gtpa.removeJointPersistent(jointId)
             isConnected = false
             jointId = -1
+            jointAddQueued = false
             shouldRemoveJoint = false
         }
     }
 
     fun disconnect() {
         this.shouldRemoveJoint = true
+        jointAddQueued = false
         partner = null
         partnerPos = null
         partnerShipId = null
         partnerFacing = null
+        persistentJointKey = null
         reconnectDelay = 10
     }
 
     override fun destroy() {
         if (level is ServerLevel) {
             val sLevel = (level as ServerLevel)
-            sLevel.gtpa.removeJoint(jointId)
+            sLevel.gtpa.removeJointPersistent(jointId)
             //println("tried to use GTPA to remove joint")
         }
         partner?.disconnect()
