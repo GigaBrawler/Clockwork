@@ -19,10 +19,15 @@ import org.valkyrienskies.clockwork.ClockworkModClient
 import org.valkyrienskies.clockwork.ClockworkSounds
 import org.valkyrienskies.clockwork.content.physicalities.extendon.ExtendonBlockEntity.Companion.getQuaterniond
 import org.valkyrienskies.clockwork.util.addJointPersistent
-import org.valkyrienskies.clockwork.util.buildPersistentOwnerRef
+import org.valkyrienskies.clockwork.util.buildCanonicalPairOwnerRef
+import org.valkyrienskies.clockwork.util.deterministicPersistentJointKey
+import org.valkyrienskies.clockwork.util.getRuntimeIdForPersistentKey
+import org.valkyrienskies.clockwork.util.isCanonicalPairLeader
 import org.valkyrienskies.clockwork.util.KNodeBlockEntity
+import org.valkyrienskies.clockwork.util.pointToWorld
 import org.valkyrienskies.clockwork.util.gtpa
 import org.valkyrienskies.clockwork.util.removeJointPersistent
+import org.valkyrienskies.clockwork.util.resolveRuntimeJointId
 import org.valkyrienskies.clockwork.util.universal_joint.IUniversalJoint
 import org.valkyrienskies.clockwork.util.updateJoint
 import org.valkyrienskies.clockwork.util.updateJointPersistent
@@ -40,7 +45,6 @@ import org.valkyrienskies.kelvin.api.edges.PipeDuctEdge
 import org.valkyrienskies.kelvin.util.KelvinExtensions.toDuctNodePos
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getShipManagingPos
-import org.valkyrienskies.mod.common.toWorldCoordinates
 import org.valkyrienskies.mod.common.util.toJOMLD
 import java.util.EnumMap
 import kotlin.collections.set
@@ -72,11 +76,6 @@ class HosePortBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
             it.invoke()
             loadFn = null
         }
-
-        if (distanceJointId != null && distanceJoint != null) {
-            val level = level as ServerLevel
-            level.gtpa.updateJointPersistent(distanceJointId!!, this.distanceJoint!!)
-        }
     }
 
     override fun connectTo(other: IUniversalJoint) {
@@ -86,11 +85,17 @@ class HosePortBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
         if (connectedBe!!.edge != null) edge = connectedBe!!.edge
         else createEdge(blockPos.toDuctNodePos(level!!.dimension().location()), other.pos.toDuctNodePos(connectedBe!!.level!!.dimension().location()))
 
+        val iAmLeader = isDeterministicLeader()
         if (connectedBe!!.distanceJoint != null) {
-            distanceJoint = connectedBe!!.distanceJoint
-            distanceJointId = connectedBe!!.distanceJointId
+            copyJointStateFrom(connectedBe!!)
             main = false
-        } else createJoint()
+        } else if (iAmLeader) {
+            createJoint()
+        } else {
+            connectedBe!!.createJoint()
+            copyJointStateFrom(connectedBe!!)
+            main = false
+        }
 
         level?.playSound(null, blockPos, ClockworkSounds.HOSE_ATTACH.mainEvent, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f)
 
@@ -143,17 +148,18 @@ class HosePortBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
         val quater0 = getQuaterniond(level.getBlockState(blockPos).getValue(BlockStateProperties.FACING))
         val quater1 = getQuaterniond(level.getBlockState(connectedBe!!.blockPos).getValue(BlockStateProperties.FACING))
 
-        val distanceInWorld = level.toWorldCoordinates(pos0).distance(level.toWorldCoordinates(pos1))
+        val distanceInWorld = pointToWorld(level, shipId0, pos0).distance(pointToWorld(level, shipId1, pos1))
 
         distanceJoint = VSDistanceJoint(pose0 = VSJointPose(pos0, quater0), pose1 = VSJointPose(pos1, quater1) , shipId0 = shipId0, shipId1 = shipId1,
             minDistance = 0f, maxDistance = (distanceInWorld + 1.0).roundToInt().toFloat()
         )
-        val ownerRef = buildPersistentOwnerRef(level.dimensionId, blockPos, "hose_distance")
+        val ownerRef = buildPairOwnerRef("hose_distance") ?: return
+        val persistentKey = deterministicPersistentJointKey(ownerRef)
         level.gtpa.addJointPersistent(
             joint = distanceJoint!!,
             ownerType = "clockwork_hose_port",
             ownerRef = ownerRef,
-            persistentKey = null,
+            persistentKey = persistentKey,
             delay = 0
         ) { distanceJointId = it }
 
@@ -163,12 +169,44 @@ class HosePortBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
     private fun removeJoint() {
         val level = level as ServerLevel
 
-        level.gtpa.removeJointPersistent(distanceJointId!!)
+        resolveJointRuntimeId(level, distanceJointId, "hose_distance")?.let { runtimeId ->
+            level.gtpa.removeJointPersistent(runtimeId)
+        }
 
         distanceJoint = null
         distanceJointId = null
 
         main = false
+    }
+
+    private fun copyJointStateFrom(other: HosePortBlockEntity) {
+        distanceJoint = other.distanceJoint
+        distanceJointId = other.distanceJointId
+    }
+
+    private fun buildPairOwnerRef(slot: String): String? {
+        val level = level as? ServerLevel ?: return null
+        val partnerPos = connectedBe?.blockPos ?: return null
+        return buildCanonicalPairOwnerRef(level.dimensionId, blockPos, partnerPos, slot)
+    }
+
+    private fun resolveJointRuntimeId(level: ServerLevel, currentRuntimeId: Int?, slot: String): Int? {
+        val resolvedFromCurrent = currentRuntimeId
+            ?.let(level.gtpa::resolveRuntimeJointId)
+            ?.takeIf { level.gtpa.getJointById(it) != null }
+        if (resolvedFromCurrent != null) {
+            return resolvedFromCurrent
+        }
+        val ownerRef = buildPairOwnerRef(slot) ?: return null
+        val persistentKey = deterministicPersistentJointKey(ownerRef)
+        return level.gtpa.getRuntimeIdForPersistentKey(persistentKey)
+            ?.let(level.gtpa::resolveRuntimeJointId)
+            ?.takeIf { level.gtpa.getJointById(it) != null }
+    }
+
+    private fun isDeterministicLeader(): Boolean {
+        val partnerPos = connectedBe?.blockPos ?: return true
+        return isCanonicalPairLeader(blockPos, partnerPos)
     }
 
 

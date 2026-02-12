@@ -46,7 +46,6 @@ import org.valkyrienskies.clockwork.util.newPersistentJointKey
 import org.valkyrienskies.clockwork.util.removeJointPersistent
 import org.valkyrienskies.clockwork.util.resolveRuntimeJointId
 import org.valkyrienskies.clockwork.util.updateJointPersistent
-import org.valkyrienskies.clockwork.util.updateJoint
 import org.valkyrienskies.clockwork.util.minus
 import org.valkyrienskies.clockwork.util.plus
 import org.valkyrienskies.clockwork.util.times
@@ -59,7 +58,6 @@ import org.valkyrienskies.core.internal.joints.*
 import org.valkyrienskies.core.impl.bodies.properties.BodyTransformFactory
 
 import org.valkyrienskies.core.impl.util.serialization.VSJacksonUtil
-import org.valkyrienskies.core.internal.world.VsiPhysLevel
 import org.valkyrienskies.core.util.datastructures.DenseBlockPosSet
 import org.valkyrienskies.kelvin.util.KelvinExtensions.toMinecraft
 import org.valkyrienskies.kelvin.util.KelvinExtensions.toVector3d
@@ -180,14 +178,26 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
 
     private fun updateDrive(driveVelocity: VSRevoluteJoint.VSRevoluteDriveVelocity? = null) {
         val lockedBehavior = isLockedBehavior() || aligning
+        val shouldPushImmediately: Boolean
         if (lockedBehavior) {
-            joint = VSFixedJoint(joint!!.shipId0, joint!!.pose0, joint!!.shipId1, joint!!.pose1, compliance = 1e-100)
+            val wasFixed = joint is VSFixedJoint
+            val needsInitialization = !wasFixed || !fixedModeInitialized
+            if (!wasFixed) {
+                joint = VSFixedJoint(joint!!.shipId0, joint!!.pose0, joint!!.shipId1, joint!!.pose1, compliance = 1e-100)
+            }
+            if (needsInitialization) {
+                val desiredAngleRad = currentDesiredFixedAngleRad()
+                initializeFixedModeState(desiredAngleRad, getActualAngle())
+                joint = buildFixedJointFromCurrentJoint(joint!!, lastAppliedAngleRad) ?: joint
+            }
+            shouldPushImmediately = needsInitialization
             controllerUpdateData = PhysBearingUpdateData(
                 Math.toRadians(targetAngle.toDouble()),
                 0f,
                 true
             )
         } else {
+            resetFixedFollowState()
             joint = VSRevoluteJoint(
                 joint!!.shipId0,
                 joint!!.pose0,
@@ -202,59 +212,143 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 getRealisticAngularSpeed(),
                 false
             )
+            shouldPushImmediately = true
         }
 
-        if (jointID != -1 && level is ServerLevel) {
-            (level as ServerLevel).gtpa.updateJointPersistent(jointID, joint!!)
+        if (jointID != -1 && level is ServerLevel && shouldPushImmediately) {
+            val serverLevel = level as ServerLevel
+            val resolvedJointId = serverLevel.gtpa.resolveRuntimeJointId(jointID)
+            jointID = resolvedJointId
+            serverLevel.gtpa.updateJointPersistent(resolvedJointId, joint!!)
         }
     }
 
     @Volatile override lateinit var dimension: DimensionId
-    @Volatile private var sDir1: Vector3dc? = null
-    @Volatile private var sDir2: Vector3dc? = null
-    @Volatile private var pTick = 0
+    @Volatile private var fixedModeInitialized = false
+    @Volatile private var fixedForcePush = false
+    @Volatile private var lastAppliedAngleRad = Double.NaN
+    @Volatile private var lastDesiredAngleRad = Double.NaN
+    @Volatile private var lastPushedAngleRad = Double.NaN
     @Volatile private var lastAngle = targetAngle
     @Volatile private var curAngle = targetAngle
+
+    private fun currentDesiredFixedAngleRad(): Double {
+        return if (aligning) {
+            0.0
+        } else {
+            Math.toRadians(targetAngle.toDouble())
+        }
+    }
+
+    private fun initializeFixedModeState(desiredAngleRad: Double, actualAngleRad: Double?) {
+        lastDesiredAngleRad = desiredAngleRad
+        lastAppliedAngleRad = PhysBearingAngleMath.initializeAppliedAngle(desiredAngleRad, actualAngleRad)
+        lastPushedAngleRad = Double.NaN
+        fixedModeInitialized = true
+        fixedForcePush = true
+    }
+
+    private fun resetFixedFollowState() {
+        fixedModeInitialized = false
+        fixedForcePush = false
+        lastAppliedAngleRad = Double.NaN
+        lastDesiredAngleRad = Double.NaN
+        lastPushedAngleRad = Double.NaN
+    }
+
+    private fun buildFixedJointFromCurrentJoint(currentJoint: VSJoint, angleRad: Double): VSFixedJoint? {
+        if (!angleRad.isFinite()) {
+            return null
+        }
+        if (!bearingAxis.isFinite || bearingAxis.lengthSquared() <= 1e-12) {
+            return null
+        }
+
+        val axis = bearingAxis.normalize(Vector3d())
+        val baseRotation = getHingeRotation(axis)
+        val sinHalf = sin(angleRad * 0.5)
+        val rotatingAttachment = Quaterniond(
+            axis.x * sinHalf,
+            axis.y * sinHalf,
+            axis.z * sinHalf,
+            org.joml.Math.cosFromSin(sinHalf, angleRad * 0.5)
+        ).mul(baseRotation, Quaterniond()).normalize()
+        val fixedAttachment = Quaterniond(baseRotation).normalize()
+
+        return when (currentJoint) {
+            is VSFixedJoint -> VSFixedJoint(
+                currentJoint.shipId0,
+                VSJointPose(currentJoint.pose0.pos, fixedAttachment),
+                currentJoint.shipId1,
+                VSJointPose(currentJoint.pose1.pos, rotatingAttachment),
+                compliance = 1e-100
+            )
+            is VSRevoluteJoint -> VSFixedJoint(
+                currentJoint.shipId0,
+                VSJointPose(currentJoint.pose0.pos, fixedAttachment),
+                currentJoint.shipId1,
+                VSJointPose(currentJoint.pose1.pos, rotatingAttachment),
+                compliance = 1e-100
+            )
+            else -> null
+        }
+    }
+
+    private fun hasMatchingJointEndpoints(expected: VSJoint, runtime: VSJoint): Boolean {
+        return expected.shipId0 == runtime.shipId0 && expected.shipId1 == runtime.shipId1
+    }
+
     override fun physTick(physShip: PhysShip?, physLevel: PhysLevel) {
         if (isRemoved || !isRunning) return
         if (jointID == -1) return
-        val joint = joint as? VSFixedJoint ?: return
-
-        if (curAngle != targetAngle) {
-            pTick = 0
-            lastAngle = curAngle
-            curAngle = targetAngle
-        }
-
-        var angle = Math.toRadians(lastAngle + (targetAngle - lastAngle) * ((pTick+1) / 3.0))
-        if (aligning) { angle = 0.0 }
-
-        if (sDir1 == null || sDir2 == null) {
-            sDir1 = bearingAxis
-            sDir2 = bearingAxis
-        }
-
-        //AxisAngle4d clamps angle, so when going from 359 to 0 degrees quat jumps from -0.999 w to 0.999 w or smth like that
-        // which causes krunch to incorrectly interpolate, so i just extend angle range to [0, 720) and manually do this shit
-        val s = sin(angle * 0.5)
-        val fRot2 = Quaterniond(
-            sDir1!!.x() * s,
-            sDir1!!.y() * s,
-            sDir1!!.z() * s,
-            org.joml.Math.cosFromSin(s, angle * 0.5)
-        ).mul(getHingeRotation(sDir1!!))
-        val fRot1 = getHingeRotation(sDir2!!)
-
-        this.joint = VSFixedJoint(
-            joint.shipId0, VSJointPose(joint.pose0.pos, fRot1),
-            joint.shipId1, VSJointPose(joint.pose1.pos, fRot2),
-            compliance = 1e-100
-        )
-
         val serverLevel = this.level as? ServerLevel ?: return
-        serverLevel.gtpa.updateJointPersistent(jointID, this.joint!!)
+        val resolvedJointId = serverLevel.gtpa.resolveRuntimeJointId(jointID)
+        if (resolvedJointId != jointID) {
+            jointID = resolvedJointId
+        }
 
-        pTick = max(pTick++, 2)
+        val existingJoint = serverLevel.gtpa.getJointById(resolvedJointId)
+        if (existingJoint == null) {
+            tryMakeJoint()
+            return
+        }
+
+        val fixedJoint = joint as? VSFixedJoint ?: return
+        if (!hasMatchingJointEndpoints(fixedJoint, existingJoint)) {
+            tryMakeJoint()
+            return
+        }
+        val desiredAngleRad = currentDesiredFixedAngleRad()
+        if (!fixedModeInitialized) {
+            initializeFixedModeState(desiredAngleRad, getActualAngle())
+        }
+
+        lastDesiredAngleRad = PhysBearingAngleMath.unwrapNearReference(desiredAngleRad, lastAppliedAngleRad)
+        val nextAppliedAngle = PhysBearingAngleMath.stepToward(
+            currentRad = lastAppliedAngleRad,
+            targetRad = lastDesiredAngleRad,
+            maxStepRad = FIXED_MODE_MAX_STEP_RAD_PER_PHYS_TICK
+        )
+        if (!nextAppliedAngle.isFinite()) {
+            return
+        }
+        lastAppliedAngleRad = nextAppliedAngle
+
+        val shouldPush = PhysBearingAngleMath.shouldPushUpdate(
+            lastPushedAngleRad = lastPushedAngleRad,
+            nextAngleRad = nextAppliedAngle,
+            epsilonRad = FIXED_MODE_UPDATE_EPSILON_RAD,
+            force = fixedForcePush
+        )
+        if (!shouldPush) {
+            return
+        }
+
+        val updatedJoint = buildFixedJointFromCurrentJoint(fixedJoint, nextAppliedAngle) ?: return
+        this.joint = updatedJoint
+        serverLevel.gtpa.updateJointPersistent(resolvedJointId, updatedJoint)
+        lastPushedAngleRad = nextAppliedAngle
+        fixedForcePush = false
     }
 
     public override fun write(tag: CompoundTag, clientPacket: Boolean) {
@@ -339,6 +433,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         targetAngle = tag.getFloat(ClockworkConstants.Nbt.ANGLE)
         lastAngle = targetAngle
         curAngle = targetAngle
+        resetFixedFollowState()
         lastException = AssemblyException.read(tag)
         if (tag.contains(ClockworkConstants.Nbt.SHIPTRAPTION_ID)) {
             shiptraptionID = tag.getLong(ClockworkConstants.Nbt.SHIPTRAPTION_ID)
@@ -491,6 +586,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 serverLevel.gtpa.bindPersistentKey(persistentJointKey!!, resolvedJointId)
                 jointAddQueued = false
                 isRunning = true
+                if (joint is VSFixedJoint) {
+                    fixedForcePush = true
+                }
                 return
             }
         }
@@ -516,6 +614,9 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             }
             jointID = runtimeId
             isRunning = true
+            if (joint is VSFixedJoint) {
+                fixedForcePush = true
+            }
             lastStateChanged = ticks
         }
     }
@@ -642,7 +743,10 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         val ship = level.shipObjectWorld.loadedShips.getById(shiptraptionID) ?: return
         BearingController.getOrCreate(ship)!!.removePhysBearing(bearingID)
 
-        joint?.let { level.gtpa.removeJointPersistent(jointID) }
+        joint?.let {
+            val resolvedJointId = level.gtpa.resolveRuntimeJointId(jointID)
+            level.gtpa.removeJointPersistent(resolvedJointId)
+        }
     }
 
     fun disassemble() {
@@ -717,7 +821,10 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         if (level.shipObjectWorld.allShips.getById(shiptraptionID) != null) return false
 
         if (jointID != -1) {
-            joint?.let { level.gtpa.removeJointPersistent(jointID) }
+            joint?.let {
+                val resolvedJointId = level.gtpa.resolveRuntimeJointId(jointID)
+                level.gtpa.removeJointPersistent(resolvedJointId)
+            }
             jointAddQueued = false
         }
 
@@ -744,9 +851,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         sequencedAngleProgress = 0f
         targetAngle = 0f
 
-        sDir1 = null
-        sDir2 = null
-        pTick = 0
+        resetFixedFollowState()
         lastAngle = 0f
         curAngle = 0f
 
@@ -947,6 +1052,8 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
 
     companion object {
         const val NO_SHIPTRAPTION_ID: Long = -1
+        private const val FIXED_MODE_UPDATE_EPSILON_RAD = 1e-4
+        private val FIXED_MODE_MAX_STEP_RAD_PER_PHYS_TICK = Math.toRadians(12.0)
 
         //tolerance is in degrees
         @JvmStatic

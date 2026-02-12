@@ -24,10 +24,14 @@ import org.valkyrienskies.clockwork.ClockworkMod
 import org.valkyrienskies.clockwork.ClockworkModClient
 import org.valkyrienskies.clockwork.ClockworkSounds
 import org.valkyrienskies.clockwork.util.addJointPersistent
-import org.valkyrienskies.clockwork.util.buildPersistentOwnerRef
+import org.valkyrienskies.clockwork.util.buildCanonicalPairOwnerRef
+import org.valkyrienskies.clockwork.util.deterministicPersistentJointKey
+import org.valkyrienskies.clockwork.util.getRuntimeIdForPersistentKey
+import org.valkyrienskies.clockwork.util.isCanonicalPairLeader
 import org.valkyrienskies.clockwork.util.KNodeBlockEntity
 import org.valkyrienskies.clockwork.util.gtpa
 import org.valkyrienskies.clockwork.util.removeJointPersistent
+import org.valkyrienskies.clockwork.util.resolveRuntimeJointId
 import org.valkyrienskies.clockwork.util.universal_joint.IUniversalJoint
 import org.valkyrienskies.clockwork.util.updateJoint
 import org.valkyrienskies.clockwork.util.updateJointPersistent
@@ -98,8 +102,23 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
         if (abs(lerpedDistance - distance) < 0.001f) lerpedDistance = distance
 
         val tempJoint = VSJointAndId(distanceJointId!!, VSDistanceJoint(distanceJoint!!.shipId0, distanceJoint!!.pose0, distanceJoint!!.shipId1, distanceJoint!!.pose1, minDistance = lerpedDistance, maxDistance = lerpedDistance))
+        val distanceKey = buildPairPersistentKey("extendon_distance")
+        var runtimeJointId = serverLevel.gtpa.resolveRuntimeJointId(distanceJointId!!)
+        if (serverLevel.gtpa.getJointById(runtimeJointId) == null) {
+            val reboundId = distanceKey
+                ?.let(serverLevel.gtpa::getRuntimeIdForPersistentKey)
+                ?.let(serverLevel.gtpa::resolveRuntimeJointId)
+            if (reboundId != null && serverLevel.gtpa.getJointById(reboundId) != null) {
+                runtimeJointId = reboundId
+                distanceJointId = reboundId
+            } else {
+                return
+            }
+        } else if (runtimeJointId != distanceJointId) {
+            distanceJointId = runtimeJointId
+        }
 
-        serverLevel.gtpa.updateJointPersistent(distanceJointId!!, tempJoint.joint)
+        serverLevel.gtpa.updateJointPersistent(runtimeJointId, tempJoint.joint)
         distanceJoint = tempJoint.joint as VSDistanceJoint
     }
 
@@ -112,13 +131,17 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
         if (connectedBe!!.edge != null) edge = connectedBe!!.edge
         else createEdge(blockPos.toDuctNodePos(level!!.dimension().location()), other.pos.toDuctNodePos(connectedBe!!.level!!.dimension().location()))
 
+        val iAmLeader = isDeterministicLeader()
         if (connectedBe!!.distanceJoint != null) {
-            distanceJoint = connectedBe!!.distanceJoint
-            distanceJointId = connectedBe!!.distanceJointId
-            sphericalJoint = connectedBe!!.sphericalJoint
-            sphericalJointId = connectedBe!!.sphericalJointId
+            copyJointStateFrom(connectedBe!!)
             main = false
-        } else createJoint()
+        } else if (iAmLeader) {
+            createJoint()
+        } else {
+            connectedBe!!.createJoint()
+            copyJointStateFrom(connectedBe!!)
+            main = false
+        }
 
         level?.playSound(null, blockPos, ClockworkSounds.HOSE_ATTACH.mainEvent, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f)
 
@@ -179,12 +202,13 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
 
         distanceJoint = VSDistanceJoint(pose0 = VSJointPose(pos0, quater0), pose1 = VSJointPose(pos1, quater1) , shipId0 = shipId0, shipId1 = shipId1,
             minDistance = 0.5f, maxDistance = 1000f, damping = 1000f )
-        val distanceOwnerRef = buildPersistentOwnerRef(level.dimensionId, blockPos, "extendon_distance")
+        val distanceOwnerRef = buildPairOwnerRef("extendon_distance") ?: return
+        val distancePersistentKey = deterministicPersistentJointKey(distanceOwnerRef)
         level.gtpa.addJointPersistent(
             joint = distanceJoint!!,
             ownerType = "clockwork_extendon",
             ownerRef = distanceOwnerRef,
-            persistentKey = null,
+            persistentKey = distancePersistentKey,
             delay = 0
         ) { distanceJointId = it }
 
@@ -201,12 +225,13 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
 
 
         sphericalJoint = VSD6Joint(pose0 = VSJointPose(pos0, quater0), pose1 = VSJointPose(pos1, quater1) , shipId0 = shipId0, shipId1 = shipId1, swingLimit = limit, motions = motions,  )
-        val sphericalOwnerRef = buildPersistentOwnerRef(level.dimensionId, blockPos, "extendon_spherical")
+        val sphericalOwnerRef = buildPairOwnerRef("extendon_spherical") ?: return
+        val sphericalPersistentKey = deterministicPersistentJointKey(sphericalOwnerRef)
         level.gtpa.addJointPersistent(
             joint = sphericalJoint!!,
             ownerType = "clockwork_extendon",
             ownerRef = sphericalOwnerRef,
-            persistentKey = null,
+            persistentKey = sphericalPersistentKey,
             delay = 0
         ) { sphericalJointId = it }
 
@@ -216,8 +241,14 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
     private fun removeJoint() {
         val level = level as ServerLevel
 
-        if (distanceJointId != null) level.gtpa.removeJointPersistent(distanceJointId!!)
-        if (sphericalJointId != null) level.gtpa.removeJointPersistent(sphericalJointId!!)
+        val distanceRuntimeId = resolveJointRuntimeId(level, distanceJointId, "extendon_distance")
+        if (distanceRuntimeId != null) {
+            level.gtpa.removeJointPersistent(distanceRuntimeId)
+        }
+        val sphericalRuntimeId = resolveJointRuntimeId(level, sphericalJointId, "extendon_spherical")
+        if (sphericalRuntimeId != null) {
+            level.gtpa.removeJointPersistent(sphericalRuntimeId)
+        }
 
         distanceJoint = null
         distanceJointId = null
@@ -225,6 +256,42 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
         sphericalJointId = null
 
         main = false
+    }
+
+    private fun copyJointStateFrom(other: ExtendonBlockEntity) {
+        distanceJoint = other.distanceJoint
+        distanceJointId = other.distanceJointId
+        sphericalJoint = other.sphericalJoint
+        sphericalJointId = other.sphericalJointId
+    }
+
+    private fun buildPairOwnerRef(slot: String): String? {
+        val level = level as? ServerLevel ?: return null
+        val partnerPos = connectedBe?.blockPos ?: return null
+        return buildCanonicalPairOwnerRef(level.dimensionId, blockPos, partnerPos, slot)
+    }
+
+    private fun buildPairPersistentKey(slot: String): String? {
+        return buildPairOwnerRef(slot)?.let(::deterministicPersistentJointKey)
+    }
+
+    private fun resolveJointRuntimeId(level: ServerLevel, currentRuntimeId: Int?, slot: String): Int? {
+        val resolvedFromCurrent = currentRuntimeId
+            ?.let(level.gtpa::resolveRuntimeJointId)
+            ?.takeIf { level.gtpa.getJointById(it) != null }
+        if (resolvedFromCurrent != null) {
+            return resolvedFromCurrent
+        }
+        val persistentKey = buildPairPersistentKey(slot) ?: return null
+        val reboundRuntimeId = level.gtpa.getRuntimeIdForPersistentKey(persistentKey)
+            ?.let(level.gtpa::resolveRuntimeJointId)
+            ?.takeIf { level.gtpa.getJointById(it) != null }
+        return reboundRuntimeId
+    }
+
+    private fun isDeterministicLeader(): Boolean {
+        val partnerPos = connectedBe?.blockPos ?: return true
+        return isCanonicalPairLeader(blockPos, partnerPos)
     }
 
 
