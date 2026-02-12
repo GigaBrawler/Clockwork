@@ -673,25 +673,51 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         resetState()
     }
 
+    private fun prepareAnimatedClose() {
+        // If the bearing is mid-open when it deactivates, force it into the
+        // "open" state so tickAnimationLogic can smoothly close it.
+        opening = false
+        if (openProgress > 0.0f) {
+            open = true
+        }
+    }
+
+    private fun handleDestroyedSubShip(level: ServerLevel): Boolean {
+        if (shiptraptionID == NO_SHIPTRAPTION_ID) return false
+        if (level.shipObjectWorld.allShips.getById(shiptraptionID) != null) return false
+
+        if (jointID != -1) {
+            joint?.let { level.gtpa.removeJoint(jointID) }
+        }
+
+        prepareAnimatedClose()
+        resetState()
+        return true
+    }
+
     private fun resetState() {
         bearingID = -1
         shiptraptionID = NO_SHIPTRAPTION_ID
         isRunning = false
+        joint = null
+        jointID = -1
+        aligning = false
+        controllerCreationData = null
+        controllerUpdateData = null
         updateGeneratedRotation()
         assembleNextTick = false
         disassembleWhenPossible = false
         sequencedAngleLimit = -1.0f
         sequencedAngleProgress = 0f
         targetAngle = 0f
-        sendData()
-        jointID = -1
-        aligning = false
 
         sDir1 = null
         sDir2 = null
         pTick = 0
         lastAngle = 0f
         curAngle = 0f
+
+        sendData()
     }
 
     private fun tryAssembleNextTick() {
@@ -771,12 +797,15 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         ticks++
         if (level!!.isClientSide) clientAngleDiff /= 2f
         if (!level!!.isClientSide) {
+            val serverLevel = level as ServerLevel
             loadingFn?.also {
-                it(level as ServerLevel)
+                it(serverLevel)
                 loadingFn = null
             }
 
-            val subShip = (level as ServerLevel).shipObjectWorld.loadedShips.getById(shiptraptionID)
+            if (handleDestroyedSubShip(serverLevel)) return
+
+            val subShip = serverLevel.shipObjectWorld.loadedShips.getById(shiptraptionID)
             controllerCreationData?.also {
                 bearingID = BearingController
                     .getOrCreate(subShip ?: return@also)!!
