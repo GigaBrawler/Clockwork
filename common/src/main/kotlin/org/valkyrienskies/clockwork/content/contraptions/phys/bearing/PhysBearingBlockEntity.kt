@@ -41,6 +41,7 @@ import org.valkyrienskies.clockwork.util.GlueAssembler.collectGlued
 import org.valkyrienskies.clockwork.util.addJointPersistent
 import org.valkyrienskies.clockwork.util.bindPersistentKey
 import org.valkyrienskies.clockwork.util.buildPersistentOwnerRef
+import org.valkyrienskies.clockwork.util.getRuntimeIdForPersistentKey
 import org.valkyrienskies.clockwork.util.gtpa
 import org.valkyrienskies.clockwork.util.newPersistentJointKey
 import org.valkyrienskies.clockwork.util.removeJointPersistent
@@ -570,12 +571,40 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
         return hingeOrientation
     }
 
+    private fun tryRebindPersistentRuntimeJoint(serverLevel: ServerLevel): Boolean {
+        val key = persistentJointKey?.ifBlank { null } ?: return false
+        val runtimeJointId = serverLevel.gtpa.getRuntimeIdForPersistentKey(key)
+            ?.let(serverLevel.gtpa::resolveRuntimeJointId)
+            ?: return false
+        val runtimeJoint = serverLevel.gtpa.getJointById(runtimeJointId) ?: return false
+        val expectedJoint = joint
+        if (expectedJoint != null && !hasMatchingJointEndpoints(expectedJoint, runtimeJoint)) {
+            return false
+        }
+        if (expectedJoint == null) {
+            joint = runtimeJoint
+        }
+        jointID = runtimeJointId
+        serverLevel.gtpa.bindPersistentKey(key, runtimeJointId)
+        jointAddQueued = false
+        isRunning = true
+        if (joint is VSFixedJoint) {
+            fixedForcePush = true
+        }
+        lastStateChanged = ticks
+        sendData()
+        return true
+    }
+
     fun tryMakeJoint() {
         val joint = joint ?: return
         val serverLevel = level as? ServerLevel ?: return
 
         if (persistentJointKey.isNullOrBlank()) {
             persistentJointKey = newPersistentJointKey()
+        }
+        if (tryRebindPersistentRuntimeJoint(serverLevel)) {
+            return
         }
 
         if (jointID != -1) {
@@ -589,6 +618,7 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
                 if (joint is VSFixedJoint) {
                     fixedForcePush = true
                 }
+                sendData()
                 return
             }
         }
@@ -610,14 +640,18 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             if (runtimeId < 0) {
                 jointID = -1
                 isRunning = false
+                sendData()
                 return@addJointPersistent
             }
-            jointID = runtimeId
+            val resolvedRuntimeId = serverLevel.gtpa.resolveRuntimeJointId(runtimeId)
+            jointID = resolvedRuntimeId
+            persistentJointKey?.let { serverLevel.gtpa.bindPersistentKey(it, resolvedRuntimeId) }
             isRunning = true
             if (joint is VSFixedJoint) {
                 fixedForcePush = true
             }
             lastStateChanged = ticks
+            sendData()
         }
     }
 
@@ -960,7 +994,12 @@ class PhysBearingBlockEntity(type: BlockEntityType<*>?, pos: BlockPos?, state: B
             if (disassembleWhenPossible) { shipDisassemble() }
         }
         tickAnimationLogic()
-        if (!isRunning) return
+        if (!isRunning) {
+            if (!level!!.isClientSide) {
+                tryRebindPersistentRuntimeJoint(level as ServerLevel)
+            }
+            if (!isRunning) return
+        }
         if (shiptraptionID == NO_SHIPTRAPTION_ID) {
             targetAngle = 0f
         } else if (joint != null && jointID != -1) {

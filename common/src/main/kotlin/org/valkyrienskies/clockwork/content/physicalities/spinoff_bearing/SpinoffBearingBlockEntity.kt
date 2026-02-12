@@ -26,17 +26,13 @@ import org.joml.Quaterniondc
 import org.joml.Vector3d
 import org.joml.Vector3dc
 import org.valkyrienskies.clockwork.ClockworkSounds
-import org.valkyrienskies.clockwork.content.physicalities.extendon.ExtendonBlockEntity
 import org.valkyrienskies.clockwork.util.addJointPersistent
 import org.valkyrienskies.clockwork.util.buildCanonicalPairOwnerRef
 import org.valkyrienskies.clockwork.util.deterministicPersistentJointKey
 import org.valkyrienskies.clockwork.util.getRuntimeIdForPersistentKey
+import org.valkyrienskies.clockwork.content.physicalities.extendon.ExtendonBlockEntity
 import org.valkyrienskies.clockwork.util.gtpa
-import org.valkyrienskies.clockwork.util.pointFromWorld
-import org.valkyrienskies.clockwork.util.pointToWorld
 import org.valkyrienskies.clockwork.util.removeJointPersistent
-import org.valkyrienskies.clockwork.util.rotFromWorld
-import org.valkyrienskies.clockwork.util.rotToWorld
 import org.valkyrienskies.clockwork.util.resolveRuntimeJointId
 import org.valkyrienskies.core.api.VsBeta
 import org.valkyrienskies.core.api.ships.LoadedServerShip
@@ -206,6 +202,9 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
                         partner!!.partnerShipId = level.getLoadedShipManagingPos(position)?.id
                         partner!!.partnerFacing = this.facing
                         partner!!.isLeader = false
+                        val pairKey = buildPairPersistentKey(sLevel)
+                        persistentJointKey = pairKey
+                        partner!!.persistentJointKey = pairKey
                         if (isLeader) {
                             shouldVerifyConnection = true
                             sLevel.playSound(
@@ -226,15 +225,15 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
         physShip: PhysShip?,
         physLevel: PhysLevel
     ) {
+        val sLevel = level as? ServerLevel ?: return
         if (shouldVerifyConnection) {
             val vsiPhysLevel = physLevel as VsiPhysLevel
-            val serverLevel = level as? ServerLevel ?: return
-            val runtimeJointId = resolveRuntimeJointId(serverLevel, jointId)
-            if (runtimeJointId != null && vsiPhysLevel.getJointById(runtimeJointId) != null) {
-                jointId = runtimeJointId
+            resolveRuntimeJointId(sLevel, jointId)?.let { resolvedJointId ->
+                if (vsiPhysLevel.getJointById(resolvedJointId) == null) return@let
+                jointId = resolvedJointId
                 isConnected = true
                 shouldVerifyConnection = false
-            } else {
+            } ?: run {
                 isConnected = false
                 jointId = -1
             }
@@ -243,26 +242,18 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
                 if (partnerFacing == null || partnerPos == null) return
                 //create joint between the two bearings
                 val selfRotation = facing.getQuaternion()
+                val partnerRotation = partnerFacing?.opposite!!.getQuaternion()
                 val hingeOrientation = selfRotation.mul(Quaterniond(AxisAngle4d(Math.toRadians(90.0), 0.0, 0.0, 1.0)), Quaterniond()).normalize()
+                val partnerHingeOrientation = partnerRotation.mul(Quaterniond(AxisAngle4d(Math.toRadians(90.0), 0.0, 0.0, 1.0)), Quaterniond()).normalize()
                 val attachmentOffset0: Vector3dc = selfRotation.transform(Vector3d(0.0, 0.5, 0.0))
-
-                val selfShipFrameId = physShip?.id
-                val partnerShipFrameId = partnerShipId
-                val selfAnchorLocal = this.position.toJOMLD().add(0.5, 0.5, 0.5).add(attachmentOffset0)
-                val anchorInWorld = pointToWorld(serverLevel, selfShipFrameId, selfAnchorLocal)
-                val partnerAnchorLocal = pointFromWorld(serverLevel, partnerShipFrameId, anchorInWorld)
-
-                val hingeInWorld = rotToWorld(serverLevel, selfShipFrameId, hingeOrientation)
-                val selfHingeLocal = rotFromWorld(serverLevel, selfShipFrameId, hingeInWorld)
-                val partnerHingeLocal = rotFromWorld(serverLevel, partnerShipFrameId, hingeInWorld)
-
+                val attachmentOffset1: Vector3dc = partnerRotation.transform(Vector3d(0.0, 0.5, 0.0))
                 val selfPose = VSJointPose(
-                    selfAnchorLocal,
-                    selfHingeLocal
+                    this.position.toJOMLD().add(0.5, 0.5, 0.5).add(attachmentOffset0),
+                    hingeOrientation
                 )
                 val partnerPose = VSJointPose(
-                    partnerAnchorLocal,
-                    partnerHingeLocal
+                    partnerPos!!.toJOMLD().add(0.5, 0.5, 0.5).add(attachmentOffset1),
+                    partnerHingeOrientation
                 )
                 // we need to have the one that isn't on a ship be the first one for the calcs
                 val revoluteJoint = if (physShip == null) {
@@ -282,10 +273,12 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
                         driveFreeSpin = true
                     )
                 }
-                val ownerRef = buildPairOwnerRef(serverLevel) ?: return
-                val stablePersistentKey = deterministicPersistentJointKey(ownerRef)
+
+                val ownerRef = buildPairOwnerRef(sLevel) ?: return
+                val stablePersistentKey = persistentJointKey?.ifBlank { null } ?: deterministicPersistentJointKey(ownerRef)
                 persistentJointKey = stablePersistentKey
-                resolveRuntimeJointId(serverLevel, jointId)?.let { existingRuntimeId ->
+
+                resolveRuntimeJointId(sLevel, jointId)?.let { existingRuntimeId ->
                     if (vsiPhysLevel.getJointById(existingRuntimeId) != null) {
                         jointId = existingRuntimeId
                         isConnected = true
@@ -293,9 +286,10 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
                         return
                     }
                 }
+
                 if (!jointAddQueued) {
                     jointAddQueued = true
-                    serverLevel.gtpa.addJointPersistent(
+                    sLevel.gtpa.addJointPersistent(
                         joint = revoluteJoint,
                         ownerType = "clockwork_spinoff_bearing",
                         ownerRef = ownerRef,
@@ -304,12 +298,12 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
                     ) { runtimeId ->
                         jointAddQueued = false
                         if (runtimeId < 0) {
-                            isConnected = false
                             jointId = -1
+                            isConnected = false
                             shouldVerifyConnection = true
                             return@addJointPersistent
                         }
-                        jointId = serverLevel.gtpa.resolveRuntimeJointId(runtimeId)
+                        jointId = sLevel.gtpa.resolveRuntimeJointId(runtimeId)
                         isConnected = true
                         shouldVerifyConnection = false
                     }
@@ -317,8 +311,7 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
             }
         }
         if (shouldRemoveJoint) {
-            val serverLevel = level as? ServerLevel ?: return
-            resolveRuntimeJointId(serverLevel, jointId)?.let(serverLevel.gtpa::removeJointPersistent)
+            resolveRuntimeJointId(sLevel, jointId)?.let(sLevel.gtpa::removeJointPersistent)
             isConnected = false
             jointId = -1
             jointAddQueued = false
@@ -328,7 +321,7 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
 
     fun disconnect() {
         this.shouldRemoveJoint = true
-        jointAddQueued = false
+        this.jointAddQueued = false
         partner = null
         partnerPos = null
         partnerShipId = null
@@ -348,23 +341,23 @@ class SpinoffBearingBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: 
     }
 
     private fun buildPairOwnerRef(serverLevel: ServerLevel): String? {
-        val partnerPos = partnerPos ?: return null
-        return buildCanonicalPairOwnerRef(serverLevel.dimensionId, position, partnerPos, "pair_joint")
+        val targetPos = partnerPos ?: return null
+        return buildCanonicalPairOwnerRef(serverLevel.dimensionId, position, targetPos, "pair_joint")
+    }
+
+    private fun buildPairPersistentKey(serverLevel: ServerLevel): String? {
+        return buildPairOwnerRef(serverLevel)?.let(::deterministicPersistentJointKey)
     }
 
     private fun resolveRuntimeJointId(serverLevel: ServerLevel, runtimeOrLegacyId: Int): Int? {
-        val resolvedFromCurrent = if (runtimeOrLegacyId >= 0) {
-            serverLevel.gtpa.resolveRuntimeJointId(runtimeOrLegacyId)
-        } else {
-            null
-        }
-        if (resolvedFromCurrent != null && serverLevel.gtpa.getJointById(resolvedFromCurrent) != null) {
-            return resolvedFromCurrent
+        if (runtimeOrLegacyId >= 0) {
+            val resolvedFromCurrent = serverLevel.gtpa.resolveRuntimeJointId(runtimeOrLegacyId)
+            if (serverLevel.gtpa.getJointById(resolvedFromCurrent) != null) {
+                return resolvedFromCurrent
+            }
         }
 
-        val key = persistentJointKey?.ifBlank { null }
-            ?: buildPairOwnerRef(serverLevel)?.let(::deterministicPersistentJointKey)
-            ?: return null
+        val key = persistentJointKey?.ifBlank { null } ?: buildPairPersistentKey(serverLevel) ?: return null
         persistentJointKey = key
         return serverLevel.gtpa.getRuntimeIdForPersistentKey(key)
             ?.let(serverLevel.gtpa::resolveRuntimeJointId)

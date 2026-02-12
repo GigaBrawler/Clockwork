@@ -23,6 +23,7 @@ import org.valkyrienskies.clockwork.content.contraptions.phys.slicker.SlickerBlo
 import org.valkyrienskies.clockwork.content.contraptions.phys.slicker.SlickerMovementBehavior.Companion.isAttachedToShipOrWorld
 import org.valkyrienskies.clockwork.platform.PlatformUtils
 import org.valkyrienskies.clockwork.util.ClockworkConstants
+import org.valkyrienskies.clockwork.util.getRuntimeIdForPersistentKey
 import org.valkyrienskies.clockwork.util.gtpa
 import org.valkyrienskies.clockwork.util.removeJointPersistent
 import org.valkyrienskies.clockwork.util.resolveRuntimeJointId
@@ -62,13 +63,13 @@ class SlickerBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockSt
     }
 
     private fun removeConstraint(level: ServerLevel?, removeTags: Boolean) {
-        val rootData = PlatformUtils.getExtraData(this)
-        val extraData = rootData.getCompound(ClockworkConstants.Nbt.CONDENSED_DATA)
+        val extraData = PlatformUtils.getExtraData(this).getCompound(ClockworkConstants.Nbt.CONDENSED_DATA)
         if (extraData.contains(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID)) {
             if (level != null) {
-                val runtimeJointId =
-                    level.gtpa.resolveRuntimeJointId(extraData.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID))
-                level.gtpa.removeJointPersistent(runtimeJointId)
+                val runtimeJointId = resolveAttachmentRuntimeId(level, extraData)
+                if (runtimeJointId != null) {
+                    level.gtpa.removeJointPersistent(runtimeJointId)
+                }
             }
             if (removeTags) {
                 extraData.remove(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID)
@@ -77,15 +78,12 @@ class SlickerBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockSt
                 extraData.remove(ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY)
                 extraData.remove(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ADD_QUEUED)
             }
-            rootData.put(ClockworkConstants.Nbt.CONDENSED_DATA, extraData)
         }
     }
 
     private fun doTick() {
         if (this.level == null || this.level!!.isClientSide) return
         val slevel = this.level as ServerLevel
-        val rootData = PlatformUtils.getExtraData(this)
-        val condensedData = rootData.getCompound(ClockworkConstants.Nbt.CONDENSED_DATA)
 
         val myDir: Direction = blockState.getValue(DirectionalBlock.FACING)
         val myDirNormal: Vector3d = Vec3.atLowerCornerOf(myDir.normal).toJOML().normalize()
@@ -94,7 +92,7 @@ class SlickerBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockSt
             false, slevel,
                 Vec3.atCenterOf(
                     blockPos
-                ).toJOML(), myDirNormal, condensedData
+                ).toJOML(), myDirNormal, PlatformUtils.getExtraData(this)// this.extraCustomData
         ) //isAttachedToShipOrWorld(false);
 
         //val shipAttached = attachedShipId != -1L
@@ -108,7 +106,7 @@ class SlickerBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockSt
                         true, slevel,
                             Vec3.atCenterOf(
                                 blockPos
-                            ).toJOML(), myDirNormal, condensedData
+                            ).toJOML(), myDirNormal, PlatformUtils.getExtraData(this)
                     )
                 ) {
                     shipStuck = true
@@ -124,18 +122,18 @@ class SlickerBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockSt
                 shipStuck = false
             }
             waitForNoPower = true
-        } else if (isBlockStateExtended() && !condensedData.contains(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID) && !shipStuck && shipAttached && blockState.getValue(
+        } else if (isBlockStateExtended() && !PlatformUtils.getExtraData(this).getCompound(ClockworkConstants.Nbt.CONDENSED_DATA).contains(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID) && !shipStuck && shipAttached && blockState.getValue(
                 POWERED
             )
         ) {
             //Sticker extended with nothing attached and is powered but there is a ship thing in range
             waitForNoPower = false
 
-                if (isAttachedToShipOrWorld(
+            if (isAttachedToShipOrWorld(
                     true, slevel,
                         Vec3.atCenterOf(
                             blockPos
-                        ).toJOML(), myDirNormal, condensedData
+                        ).toJOML(), myDirNormal, PlatformUtils.getExtraData(this)
                 )
             ) {
                 ClockworkSounds.DOINK.playOnServer(slevel, BlockPos.containing(level.toWorldCoordinates(worldPosition)), 0.35f, 0.75f)
@@ -149,7 +147,6 @@ class SlickerBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockSt
             shipStuck = false
             sendData()
         }
-        rootData.put(ClockworkConstants.Nbt.CONDENSED_DATA, condensedData)
     }
 
     override fun destroy() {
@@ -235,8 +232,7 @@ class SlickerBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockSt
         if (this.attachmentConstraintId != -1) {
             condensedTag.putInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID, this.attachmentConstraintId)
         }
-        val rootData = PlatformUtils.getExtraData(this)
-        val extraData = rootData.getCompound(ClockworkConstants.Nbt.CONDENSED_DATA)
+        val extraData = PlatformUtils.getExtraData(this).getCompound(ClockworkConstants.Nbt.CONDENSED_DATA)
         if (extraData.contains(ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY)) {
             condensedTag.putString(
                 ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY,
@@ -255,29 +251,37 @@ class SlickerBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockSt
         if (clientPacket) update = true
         val tag = compound.getCompound(ClockworkConstants.Nbt.CONDENSED_DATA)
         if (tag.contains(ClockworkConstants.Nbt.ATTACHED_SHIP)) {
-            this.attachedShipId = tag.getLong(ClockworkConstants.Nbt.ATTACHED_SHIP)
+            this.attachedShipId = compound.getLong(ClockworkConstants.Nbt.ATTACHED_SHIP)
         }
         if (tag.contains(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT)) {
-            this.attachmentConstraintData = mapper.readValue(
-                tag.getByteArray(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT),
-                VSFixedJoint::class.java
-            )
+            this.attachmentConstraintData = mapper.readValue(compound.getByteArray(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT), VSFixedJoint::class.java)
         }
         if (tag.contains(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID)) {
-            this.attachmentConstraintId = tag.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID)
+            this.attachmentConstraintId = compound.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID)
         }
-        this.distance = tag.getDouble(ClockworkConstants.Nbt.SHIP_SLICKER_DISTANCE)
-        this.shipStuck = tag.getBoolean(ClockworkConstants.Nbt.SHIP_STUCK)
-
+        this.distance = compound.getDouble(ClockworkConstants.Nbt.SHIP_SLICKER_DISTANCE)
+        this.shipStuck = compound.getBoolean(ClockworkConstants.Nbt.SHIP_STUCK)
         if (tag.contains(ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY)) {
-            val rootData = PlatformUtils.getExtraData(this)
-            val extraData = rootData.getCompound(ClockworkConstants.Nbt.CONDENSED_DATA)
-            extraData.putString(
-                ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY,
-                tag.getString(ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY)
-            )
-            rootData.put(ClockworkConstants.Nbt.CONDENSED_DATA, extraData)
+            PlatformUtils.getExtraData(this).getCompound(ClockworkConstants.Nbt.CONDENSED_DATA)
+                .putString(
+                    ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY,
+                    tag.getString(ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY)
+                )
         }
+    }
+
+    private fun resolveAttachmentRuntimeId(level: ServerLevel, tag: CompoundTag): Int? {
+        if (!tag.contains(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID)) return null
+        val currentRuntimeId = level.gtpa.resolveRuntimeJointId(tag.getInt(ClockworkConstants.Nbt.ATTACHMENT_CONSTRAINT_ID))
+        if (level.gtpa.getJointById(currentRuntimeId) != null) {
+            return currentRuntimeId
+        }
+        if (!tag.contains(ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY)) return null
+        val key = tag.getString(ClockworkConstants.Nbt.ATTACHMENT_PERSISTENT_KEY)
+        if (key.isBlank()) return null
+        return level.gtpa.getRuntimeIdForPersistentKey(key)
+            ?.let(level.gtpa::resolveRuntimeJointId)
+            ?.takeIf { level.gtpa.getJointById(it) != null }
     }
 
     fun playSound(attach: Boolean) {

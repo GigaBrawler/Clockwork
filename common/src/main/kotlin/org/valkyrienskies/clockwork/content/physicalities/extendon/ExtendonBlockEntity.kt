@@ -27,11 +27,11 @@ import org.valkyrienskies.clockwork.util.addJointPersistent
 import org.valkyrienskies.clockwork.util.buildCanonicalPairOwnerRef
 import org.valkyrienskies.clockwork.util.deterministicPersistentJointKey
 import org.valkyrienskies.clockwork.util.getRuntimeIdForPersistentKey
-import org.valkyrienskies.clockwork.util.isCanonicalPairLeader
 import org.valkyrienskies.clockwork.util.KNodeBlockEntity
 import org.valkyrienskies.clockwork.util.gtpa
 import org.valkyrienskies.clockwork.util.removeJointPersistent
 import org.valkyrienskies.clockwork.util.resolveRuntimeJointId
+import org.valkyrienskies.clockwork.util.safeAirPressure
 import org.valkyrienskies.clockwork.util.universal_joint.IUniversalJoint
 import org.valkyrienskies.clockwork.util.updateJoint
 import org.valkyrienskies.clockwork.util.updateJointPersistent
@@ -48,7 +48,6 @@ import org.valkyrienskies.mod.common.util.toJOMLD
 import java.util.EnumMap
 import org.valkyrienskies.kelvin.api.DuctNetwork.Companion.idealGasConstant
 import org.valkyrienskies.mod.common.dimensionId
-import org.valkyrienskies.mod.common.vsCore
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.max
@@ -92,7 +91,13 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
 
         val previousDistance = distanceJoint!!.minDistance!!
 
-        val distance = max(1.5f,(gasToDistance(kelvin, getDuctNodePosition(), level!!.dimensionId) + gasToDistance(kelvin, connectedBe!!.getDuctNodePosition(), level!!.dimensionId)))
+        val distance = max(
+            1.5f,
+            (
+                gasToDistance(kelvin, getDuctNodePosition(), serverLevel, level!!.dimensionId) +
+                    gasToDistance(kelvin, connectedBe!!.getDuctNodePosition(), serverLevel, level!!.dimensionId)
+                )
+            )
 
         if (distance == previousDistance) return
         if (abs(distance - previousDistance) < 0.01f) return
@@ -102,22 +107,10 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
         if (abs(lerpedDistance - distance) < 0.001f) lerpedDistance = distance
 
         val tempJoint = VSJointAndId(distanceJointId!!, VSDistanceJoint(distanceJoint!!.shipId0, distanceJoint!!.pose0, distanceJoint!!.shipId1, distanceJoint!!.pose1, minDistance = lerpedDistance, maxDistance = lerpedDistance))
-        val distanceKey = buildPairPersistentKey("extendon_distance")
-        var runtimeJointId = serverLevel.gtpa.resolveRuntimeJointId(distanceJointId!!)
-        if (serverLevel.gtpa.getJointById(runtimeJointId) == null) {
-            val reboundId = distanceKey
-                ?.let(serverLevel.gtpa::getRuntimeIdForPersistentKey)
-                ?.let(serverLevel.gtpa::resolveRuntimeJointId)
-            if (reboundId != null && serverLevel.gtpa.getJointById(reboundId) != null) {
-                runtimeJointId = reboundId
-                distanceJointId = reboundId
-            } else {
-                return
-            }
-        } else if (runtimeJointId != distanceJointId) {
+        val runtimeJointId = resolveJointRuntimeId(serverLevel, distanceJointId, "extendon_distance") ?: return
+        if (runtimeJointId != distanceJointId) {
             distanceJointId = runtimeJointId
         }
-
         serverLevel.gtpa.updateJointPersistent(runtimeJointId, tempJoint.joint)
         distanceJoint = tempJoint.joint as VSDistanceJoint
     }
@@ -131,17 +124,13 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
         if (connectedBe!!.edge != null) edge = connectedBe!!.edge
         else createEdge(blockPos.toDuctNodePos(level!!.dimension().location()), other.pos.toDuctNodePos(connectedBe!!.level!!.dimension().location()))
 
-        val iAmLeader = isDeterministicLeader()
         if (connectedBe!!.distanceJoint != null) {
-            copyJointStateFrom(connectedBe!!)
+            distanceJoint = connectedBe!!.distanceJoint
+            distanceJointId = connectedBe!!.distanceJointId
+            sphericalJoint = connectedBe!!.sphericalJoint
+            sphericalJointId = connectedBe!!.sphericalJointId
             main = false
-        } else if (iAmLeader) {
-            createJoint()
-        } else {
-            connectedBe!!.createJoint()
-            copyJointStateFrom(connectedBe!!)
-            main = false
-        }
+        } else createJoint()
 
         level?.playSound(null, blockPos, ClockworkSounds.HOSE_ATTACH.mainEvent, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f)
 
@@ -241,14 +230,8 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
     private fun removeJoint() {
         val level = level as ServerLevel
 
-        val distanceRuntimeId = resolveJointRuntimeId(level, distanceJointId, "extendon_distance")
-        if (distanceRuntimeId != null) {
-            level.gtpa.removeJointPersistent(distanceRuntimeId)
-        }
-        val sphericalRuntimeId = resolveJointRuntimeId(level, sphericalJointId, "extendon_spherical")
-        if (sphericalRuntimeId != null) {
-            level.gtpa.removeJointPersistent(sphericalRuntimeId)
-        }
+        resolveJointRuntimeId(level, distanceJointId, "extendon_distance")?.let(level.gtpa::removeJointPersistent)
+        resolveJointRuntimeId(level, sphericalJointId, "extendon_spherical")?.let(level.gtpa::removeJointPersistent)
 
         distanceJoint = null
         distanceJointId = null
@@ -256,13 +239,6 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
         sphericalJointId = null
 
         main = false
-    }
-
-    private fun copyJointStateFrom(other: ExtendonBlockEntity) {
-        distanceJoint = other.distanceJoint
-        distanceJointId = other.distanceJointId
-        sphericalJoint = other.sphericalJoint
-        sphericalJointId = other.sphericalJointId
     }
 
     private fun buildPairOwnerRef(slot: String): String? {
@@ -283,15 +259,9 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
             return resolvedFromCurrent
         }
         val persistentKey = buildPairPersistentKey(slot) ?: return null
-        val reboundRuntimeId = level.gtpa.getRuntimeIdForPersistentKey(persistentKey)
+        return level.gtpa.getRuntimeIdForPersistentKey(persistentKey)
             ?.let(level.gtpa::resolveRuntimeJointId)
             ?.takeIf { level.gtpa.getJointById(it) != null }
-        return reboundRuntimeId
-    }
-
-    private fun isDeterministicLeader(): Boolean {
-        val partnerPos = connectedBe?.blockPos ?: return true
-        return isCanonicalPairLeader(blockPos, partnerPos)
     }
 
 
@@ -348,7 +318,21 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
             // extendon specific: display current length
             val kelvin = if (Minecraft.getInstance().isLocalServer && Platform.isFabric()) ClockworkMod.getKelvin() else ClockworkModClient.getKelvin()
 
-            val currentLength = (max(1.5f,(gasToDistance(kelvin, getDuctNodePosition(), level!!.dimensionId) + gasToDistance(kelvin, connectedBe!!.getDuctNodePosition(), level!!.dimensionId))) * 10.0f).roundToInt() / 10.0f
+            val currentLength = (
+                max(
+                    1.5f,
+                    (
+                        gasToDistance(kelvin, getDuctNodePosition(), level as? ServerLevel, level!!.dimensionId) +
+                            gasToDistance(
+                                kelvin,
+                                connectedBe!!.getDuctNodePosition(),
+                                level as? ServerLevel,
+                                level!!.dimensionId
+                            )
+                        )
+                    )
+                * 10.0f
+                ).roundToInt() / 10.0f
             tooltip.add(Component.translatable("vs_clockwork.extendon.current_length").append(Component.literal(currentLength.toString()).append("m").withStyle(ChatFormatting.YELLOW)))
 
 
@@ -440,16 +424,20 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
     companion object {
         // Calculates volume of cylinder via Ideal Gas Law, and then calculates said cylinder's height
         // Doesn't account for the elastic force of the hose, because doing so would require solving a cubic polynomial
-        fun gasToDistance(network: DuctNetwork<*>, pos: DuctNodePos, dimensionId: DimensionId): Float {
+        fun gasToDistance(network: DuctNetwork<*>, pos: DuctNodePos, level: ServerLevel?, dimensionId: DimensionId): Float {
             var moles = 0.0
             for ((gas, mass) in network.getGasMassAt(pos)) moles +=  gas.massToMoles(mass)
 
-            val pressure = vsCore.dummyShipWorldServer.aerodynamicUtils.getAirPressureForY(pos.y, dimensionId)
+            val pressure = safeAirPressure(level, pos.y.toDouble(), dimensionId)
             val temperature = network.getTemperatureAt(pos)
+            if (!moles.isFinite() || moles <= 0.0) return 0f
+            if (!temperature.isFinite() || temperature <= 0.0) return 0f
+            if (!pressure.isFinite() || pressure <= 0.0) return 0f
 
-            val volume = temperature*idealGasConstant*moles/pressure
+            val volume = temperature * idealGasConstant * moles / pressure
+            if (!volume.isFinite() || volume <= 0.0) return 0f
             val height = 4 * volume / PI
-
+            if (!height.isFinite() || height <= 0.0) return 0f
 
             return height.toFloat()
         }
