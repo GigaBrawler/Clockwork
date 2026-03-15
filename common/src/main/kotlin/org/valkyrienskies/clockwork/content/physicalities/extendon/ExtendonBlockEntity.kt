@@ -1,6 +1,5 @@
 package org.valkyrienskies.clockwork.content.physicalities.extendon
 
-import com.simibubi.create.foundation.blockEntity.SmartBlockEntity
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
 import dev.architectury.platform.Platform
 import net.minecraft.ChatFormatting
@@ -27,7 +26,7 @@ import org.valkyrienskies.clockwork.util.addJointPersistent
 import org.valkyrienskies.clockwork.util.buildCanonicalPairOwnerRef
 import org.valkyrienskies.clockwork.util.deterministicPersistentJointKey
 import org.valkyrienskies.clockwork.util.getRuntimeIdForPersistentKey
-import org.valkyrienskies.clockwork.util.KNodeBlockEntity
+import org.valkyrienskies.clockwork.util.kelvin.KNodeBlockEntity
 import org.valkyrienskies.clockwork.util.gtpa
 import org.valkyrienskies.clockwork.util.removeJointPersistent
 import org.valkyrienskies.clockwork.util.resolveRuntimeJointId
@@ -47,11 +46,12 @@ import org.valkyrienskies.mod.common.getShipManagingPos
 import org.valkyrienskies.mod.common.util.toJOMLD
 import java.util.EnumMap
 import org.valkyrienskies.kelvin.api.DuctNetwork.Companion.idealGasConstant
+import org.valkyrienskies.mod.api.vsApi
+import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 import org.valkyrienskies.mod.common.dimensionId
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: BlockState) : KNodeBlockEntity(type, pos, state), IUniversalJoint {
@@ -428,7 +428,7 @@ class ExtendonBlockEntity(type: BlockEntityType<*>?, pos: BlockPos, state: Block
             var moles = 0.0
             for ((gas, mass) in network.getGasMassAt(pos)) moles +=  gas.massToMoles(mass)
 
-            val pressure = safeAirPressure(level, pos.y.toDouble(), dimensionId)
+            val pressure = vsApi.getServerShipWorld(ValkyrienSkiesMod.currentServer)?.aerodynamicUtils?.getAirPressureForY(pos.y, dimensionId) ?: 1.0
             val temperature = network.getTemperatureAt(pos)
             if (!moles.isFinite() || moles <= 0.0) return 0f
             if (!temperature.isFinite() || temperature <= 0.0) return 0f
